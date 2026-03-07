@@ -221,9 +221,12 @@ start_dns_testing() {
             fi
         done
 
-        active_pids=("${new_pids[@]}")
-        active_result_files=("${new_files[@]}")
-        active_dns_names=("${new_names[@]}")
+        active_pids=()
+        active_result_files=()
+        active_dns_names=()
+        [[ ${#new_pids[@]} -gt 0 ]] && active_pids=("${new_pids[@]}")
+        [[ ${#new_files[@]} -gt 0 ]] && active_result_files=("${new_files[@]}")
+        [[ ${#new_names[@]} -gt 0 ]] && active_dns_names=("${new_names[@]}")
 
         sleep 0.2
 
@@ -236,10 +239,12 @@ start_dns_testing() {
     done
 
     # Cleanup remaining workers
-    for pid in "${active_pids[@]}"; do
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
-    done
+    if [[ ${#active_pids[@]} -gt 0 ]]; then
+        for pid in "${active_pids[@]}"; do
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+        done
+    fi
 
     rm -rf "$result_dir"
     WORKER_PIDS=()

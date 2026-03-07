@@ -120,9 +120,11 @@ cleanup() {
     log Warning "Shutting down..."
 
     # Kill worker processes
-    for pid in "${WORKER_PIDS[@]}"; do
-        kill "$pid" 2>/dev/null || true
-    done
+    if [[ ${#WORKER_PIDS[@]} -gt 0 ]]; then
+        for pid in "${WORKER_PIDS[@]}"; do
+            kill "$pid" 2>/dev/null || true
+        done
+    fi
 
     # Kill active connection
     stop_active_connection
