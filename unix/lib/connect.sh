@@ -26,7 +26,7 @@ start_slipstream_connection() {
 
     ACTIVE_PID=$!
 
-    local timeout=$(( CONFIG[Timeout] + 2 ))
+    local timeout=$(( ${CONFIG[Timeout]} + 2 ))
     local deadline=$(( $(date +%s) + timeout ))
     local connected=false
 
@@ -36,7 +36,7 @@ start_slipstream_connection() {
         fi
 
         local output
-        output=$(cat "$ACTIVE_OUT_FILE" 2>/dev/null)
+        output=$(cat "$ACTIVE_OUT_FILE" 2>/dev/null) || true
 
         if [[ "$output" == *"became unavailable"* ]]; then
             stop_active_connection
@@ -78,21 +78,19 @@ watch_connection() {
     while kill -0 "$ACTIVE_PID" 2>/dev/null; do
         sleep "${CONFIG[HealthCheckInterval]}"
 
-        # Check output for "became unavailable"
         local output
-        output=$(cat "$ACTIVE_OUT_FILE" 2>/dev/null)
+        output=$(cat "$ACTIVE_OUT_FILE" 2>/dev/null) || true
         if [[ "$output" == *"became unavailable"* ]]; then
             log Error "Resolver became unavailable - connection lost"
             return 1
         fi
 
-        # Health check via curl
         local healthy=false
         local status_code
         status_code=$(curl --proxy "socks5://127.0.0.1:$port" \
             --max-time "${CONFIG[ConnectivityTimeout]}" \
             -s -o /dev/null -w "%{http_code}" \
-            "${CONFIG[ConnectivityUrl]}" 2>/dev/null)
+            "${CONFIG[ConnectivityUrl]}" 2>/dev/null) || true
 
         if [[ "$status_code" == "204" ]]; then
             healthy=true
@@ -104,7 +102,7 @@ watch_connection() {
             fi
             fail_count=0
         else
-            ((fail_count++))
+            fail_count=$((fail_count + 1))
             log Warning "Health check failed ($fail_count/$max_fails)"
             if [[ $fail_count -ge $max_fails ]]; then
                 log Error "Connection lost after $max_fails consecutive failed health checks"
@@ -119,8 +117,8 @@ watch_connection() {
 
 stop_active_connection() {
     if [[ -n "$ACTIVE_PID" ]]; then
-        kill "$ACTIVE_PID" 2>/dev/null
-        wait "$ACTIVE_PID" 2>/dev/null
+        kill "$ACTIVE_PID" 2>/dev/null || true
+        wait "$ACTIVE_PID" 2>/dev/null || true
         ACTIVE_PID=""
     fi
     if [[ -n "$ACTIVE_OUT_FILE" && -f "$ACTIVE_OUT_FILE" ]]; then
@@ -163,19 +161,18 @@ start_connection_loop() {
 
         if ! start_slipstream_connection "$dns" "$port" "$exe_path"; then
             log Warning "Failed to connect via $dns"
-            ((current_index++))
-            ((reconnect_count++))
+            current_index=$((current_index + 1))
+            reconnect_count=$((reconnect_count + 1))
             continue
         fi
 
-        # Verify actual internet connectivity
         sleep 0.5
         local internet_works=false
         local status_code
         status_code=$(curl --proxy "socks5://127.0.0.1:$port" \
             --max-time "${CONFIG[ConnectivityTimeout]}" \
             -s -o /dev/null -w "%{http_code}" \
-            "${CONFIG[ConnectivityUrl]}" 2>/dev/null)
+            "${CONFIG[ConnectivityUrl]}" 2>/dev/null) || true
 
         if [[ "$status_code" == "204" ]]; then
             internet_works=true
@@ -184,24 +181,21 @@ start_connection_loop() {
         if [[ "$internet_works" != "true" ]]; then
             log Warning "Tunnel up via $dns but no internet, trying next..."
             stop_active_connection
-            ((current_index++))
-            ((reconnect_count++))
+            current_index=$((current_index + 1))
+            reconnect_count=$((reconnect_count + 1))
             continue
         fi
 
-        # Save working DNS
         local timestamp
         timestamp=$(date "+%Y-%m-%d %H:%M:%S")
         echo "$dns | $timestamp" >> "$working_path"
 
-        # Monitor the connection
         watch_connection "$port"
 
-        # Clean up
         stop_active_connection
 
         log Warning "Connection dropped. Searching for new DNS..."
-        ((current_index++))
-        ((reconnect_count++))
+        current_index=$((current_index + 1))
+        reconnect_count=$((reconnect_count + 1))
     done
 }
