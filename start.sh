@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# start.sh - Entry point for SlipStream Auto Connector (Linux/macOS)
+# Just run: ./start.sh
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Make scripts executable if they aren't
+chmod +x "$SCRIPT_DIR/slipstream-connect.sh" 2>/dev/null
+chmod +x "$SCRIPT_DIR/lib/"*.sh 2>/dev/null
+chmod +x "$SCRIPT_DIR/slipstream-client" 2>/dev/null
+
+# Run the main script, pass through all arguments
+exec "$SCRIPT_DIR/slipstream-connect.sh" "$@"
