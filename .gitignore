@@ -1,0 +1,19 @@
+# Runtime results
+results/
+
+# Executables
+*.exe
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Docs / plans (dev only)
+docs/
