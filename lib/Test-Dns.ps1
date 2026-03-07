@@ -1,6 +1,9 @@
 # lib/Test-Dns.ps1
 # Tests DNS resolvers by spawning slipstream-client.exe and verifying connectivity
 #
+# Strategy: redirect process output to temp files, poll the files.
+# This avoids the classic .NET deadlock with Peek()/ReadLine() on redirected streams.
+#
 # Detection logic:
 #   - "Connection ready" = tunnel is up (proceed to connectivity check)
 #   - "became unavailable" = resolver is dead (FAIL immediately)
@@ -50,6 +53,88 @@ function Test-Connectivity {
     return $false
 }
 
+function Test-SingleDnsViaFile {
+    <#
+    .SYNOPSIS
+        Starts slipstream-client for a single DNS, redirects output to a temp file,
+        and returns the process + metadata so the caller can poll the file.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Dns,
+        [Parameter(Mandatory)]
+        [hashtable]$Config,
+        [Parameter(Mandatory)]
+        [string]$ExePath
+    )
+
+    $port = Get-RandomPort
+    $tempFile = [System.IO.Path]::GetTempFileName()
+
+    $arguments = "--domain $($Config.Domain) --congestion-control $($Config.CongestionControl) --keep-alive-interval $($Config.KeepAliveInterval) --tcp-listen-port $port --resolver $Dns"
+
+    # Start process with stdout+stderr merged into one temp file
+    $process = Start-Process -FilePath $ExePath `
+        -ArgumentList $arguments `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $tempFile `
+        -RedirectStandardError "$tempFile.err" `
+        -PassThru
+
+    return @{
+        Dns      = $Dns
+        Port     = $port
+        Process  = $process
+        OutFile  = $tempFile
+        ErrFile  = "$tempFile.err"
+        Started  = Get-Date
+    }
+}
+
+function Read-ProcessOutput {
+    <#
+    .SYNOPSIS
+        Reads both stdout and stderr temp files and returns combined content.
+    #>
+    param(
+        [string]$OutFile,
+        [string]$ErrFile
+    )
+    $content = ""
+    try {
+        if (Test-Path $OutFile) {
+            # Use FileStream with sharing so we can read while process writes
+            $fs = [System.IO.FileStream]::new($OutFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            $reader = [System.IO.StreamReader]::new($fs)
+            $content += $reader.ReadToEnd()
+            $reader.Close()
+            $fs.Close()
+        }
+    } catch {}
+    try {
+        if (Test-Path $ErrFile) {
+            $fs = [System.IO.FileStream]::new($ErrFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            $reader = [System.IO.StreamReader]::new($fs)
+            $content += $reader.ReadToEnd()
+            $reader.Close()
+            $fs.Close()
+        }
+    } catch {}
+    return $content
+}
+
+function Stop-TestWorker {
+    param($Worker)
+    try {
+        if ($Worker.Process -and -not $Worker.Process.HasExited) {
+            $Worker.Process.Kill()
+        }
+    } catch {}
+    # Clean up temp files
+    try { if (Test-Path $Worker.OutFile) { Remove-Item $Worker.OutFile -Force } } catch {}
+    try { if (Test-Path $Worker.ErrFile) { Remove-Item $Worker.ErrFile -Force } } catch {}
+}
+
 function Start-DnsTesting {
     param(
         [Parameter(Mandatory)]
@@ -72,179 +157,119 @@ function Start-DnsTesting {
     $totalDns = $DnsList.Count
     $tested = 0
     $found = $null
+    $dnsIndex = 0
 
     Write-Log -Message "Starting DNS testing with $($Config.Workers) parallel workers..." -Level Info
     Write-Log -Message "Testing $totalDns DNS entries (timeout: $($Config.Timeout)s per entry)" -Level Info
     Write-Host ""
 
-    # Process in batches
-    for ($i = 0; $i -lt $totalDns; $i += $Config.Workers) {
-        if ($found) { break }
+    # Active workers pool
+    $workers = @()
 
-        $batchEnd = [Math]::Min($i + $Config.Workers - 1, $totalDns - 1)
-        $batch = $DnsList[$i..$batchEnd]
-        $jobs = @()
+    try {
+        while ($dnsIndex -lt $totalDns -or $workers.Count -gt 0) {
+            if ($found) { break }
 
-        foreach ($dns in $batch) {
-            $jobs += Start-Job -ScriptBlock {
-                param($Dns, $ConfigData, $ExePath)
-
-                # Reconstruct config hashtable (serialization converts to PSObject)
-                $Config = @{}
-                $ConfigData.PSObject.Properties | ForEach-Object { $Config[$_.Name] = $_.Value }
-
-                function Get-RandomPort {
-                    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-                    $listener.Start()
-                    $port = $listener.LocalEndpoint.Port
-                    $listener.Stop()
-                    return $port
-                }
-
-                function Test-Connectivity {
-                    param([int]$Port, [hashtable]$Config)
-                    try {
-                        $code = & curl.exe --proxy "socks5://127.0.0.1:$Port" `
-                            --max-time $Config.ConnectivityTimeout `
-                            -s -o NUL -w "%{http_code}" `
-                            $Config.ConnectivityUrl 2>$null
-                        if ($code -eq "204") { return $true }
-                    } catch {}
-                    try {
-                        $body = & curl.exe --proxy "socks5://127.0.0.1:$Port" `
-                            --max-time $Config.ConnectivityTimeout `
-                            -s $Config.FallbackUrl 2>$null
-                        if ($body -match "Microsoft Connect Test") { return $true }
-                    } catch {}
-                    return $false
-                }
-
-                $port = Get-RandomPort
-                $result = @{ Dns = $Dns; Port = $port; Status = "Failed"; Detail = "" }
-
-                $arguments = "--domain $($Config.Domain) --congestion-control $($Config.CongestionControl) --keep-alive-interval $($Config.KeepAliveInterval) --tcp-listen-port $port --resolver $Dns"
-                $psi = New-Object System.Diagnostics.ProcessStartInfo
-                $psi.FileName = $ExePath
-                $psi.Arguments = $arguments
-                $psi.UseShellExecute = $false
-                $psi.RedirectStandardOutput = $true
-                $psi.RedirectStandardError = $true
-                $psi.CreateNoWindow = $true
-
-                $process = $null
+            # Fill worker pool up to max
+            while ($workers.Count -lt $Config.Workers -and $dnsIndex -lt $totalDns) {
+                $dns = $DnsList[$dnsIndex]
+                $dnsIndex++
                 try {
-                    $process = [System.Diagnostics.Process]::Start($psi)
-                    $deadline = (Get-Date).AddSeconds($Config.Timeout)
-                    $connected = $false
+                    $worker = Test-SingleDnsViaFile -Dns $dns -Config $Config -ExePath $ExePath
+                    $workers += $worker
+                } catch {
+                    Write-Log -Message "FAIL: $dns - Could not start process" -Level Debug
+                    $tested++
+                }
+            }
 
-                    while ((Get-Date) -lt $deadline -and -not $process.HasExited) {
-                        Start-Sleep -Milliseconds 100
+            # Poll all active workers
+            $stillActive = @()
+            foreach ($w in $workers) {
+                $elapsed = ((Get-Date) - $w.Started).TotalSeconds
+                $output = Read-ProcessOutput -OutFile $w.OutFile -ErrFile $w.ErrFile
 
-                        # Check stdout
-                        try {
-                            if ($process.StandardOutput.Peek() -ge 0) {
-                                $line = $process.StandardOutput.ReadLine()
-                                if ($line -match "Connection ready") {
-                                    $connected = $true
-                                    break
-                                }
-                                # Only "became unavailable" means resolver is dead
-                                # Other WARNs (cert, etc.) are normal at startup
-                                if ($line -match "became unavailable") {
-                                    $result.Detail = "Resolver became unavailable"
-                                    return $result
-                                }
-                            }
-                        } catch {}
+                # Check for resolver dead
+                if ($output -match "became unavailable") {
+                    Write-Log -Message "FAIL: $($w.Dns) - Resolver became unavailable" -Level Debug
+                    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                    Add-Content -Path $failedPath -Value "$($w.Dns) | $timestamp | Resolver became unavailable" -Encoding UTF8
+                    Stop-TestWorker -Worker $w
+                    $tested++
+                    continue
+                }
 
-                        # Check stderr
-                        try {
-                            if ($process.StandardError.Peek() -ge 0) {
-                                $line = $process.StandardError.ReadLine()
-                                if ($line -match "Connection ready") {
-                                    $connected = $true
-                                    break
-                                }
-                                if ($line -match "became unavailable") {
-                                    $result.Detail = "Resolver became unavailable"
-                                    return $result
-                                }
-                            }
-                        } catch {}
-                    }
+                # Check for connection ready
+                if ($output -match "Connection ready") {
+                    Write-Log -Message "Tunnel up for $($w.Dns), verifying internet..." -Level Info
 
-                    if (-not $connected) {
-                        $result.Detail = "Timeout"
-                        return $result
-                    }
-
-                    # Small delay to let proxy fully initialize
+                    # Small delay for proxy to initialize
                     Start-Sleep -Milliseconds 500
 
-                    if (Test-Connectivity -Port $port -Config $Config) {
-                        $result.Status = "Working"
-                        $result.Detail = "Internet verified"
+                    if (Test-Connectivity -Port $w.Port -Config $Config) {
+                        Write-Log -Message "FOUND working DNS: $($w.Dns)" -Level Success
+                        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                        Add-Content -Path $workingPath -Value "$($w.Dns) | $timestamp" -Encoding UTF8
+                        $found = @{ Dns = $w.Dns; Port = $w.Port }
+                        Stop-TestWorker -Worker $w
+                        $tested++
+                        break
                     }
                     else {
-                        $result.Detail = "Tunnel up but no internet"
+                        Write-Log -Message "FAIL: $($w.Dns) - Tunnel up but no internet" -Level Debug
+                        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                        Add-Content -Path $failedPath -Value "$($w.Dns) | $timestamp | Tunnel up but no internet" -Encoding UTF8
+                        Stop-TestWorker -Worker $w
+                        $tested++
+                        continue
                     }
                 }
-                catch {
-                    $result.Detail = "Error: $($_.Exception.Message)"
-                }
-                finally {
-                    if ($process -and -not $process.HasExited) {
-                        try { $process.Kill() } catch {}
-                    }
-                    if ($process) { $process.Dispose() }
-                }
 
-                return $result
-            } -ArgumentList $dns, ([PSCustomObject]$Config), $ExePath
-        }
-
-        # Wait for batch with generous timeout
-        $maxWait = $Config.Timeout + $Config.ConnectivityTimeout + 8
-        $null = $jobs | Wait-Job -Timeout $maxWait
-
-        foreach ($job in $jobs) {
-            $tested++
-
-            if ($job.State -eq 'Running') {
-                # Job timed out
-                Stop-Job -Job $job -ErrorAction SilentlyContinue
-                Write-Log -Message "FAIL: $($batch[$jobs.IndexOf($job)]) - Job timeout" -Level Debug
-            }
-            else {
-                $result = Receive-Job -Job $job -ErrorAction SilentlyContinue
-
-                if ($result -and $result.Status -eq "Working") {
+                # Check for timeout
+                if ($elapsed -ge $Config.Timeout) {
+                    Write-Log -Message "FAIL: $($w.Dns) - Timeout" -Level Debug
                     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                    Write-Log -Message "FOUND working DNS: $($result.Dns)" -Level Success
-                    Add-Content -Path $workingPath -Value "$($result.Dns) | $timestamp" -Encoding UTF8
-                    $found = $result
+                    Add-Content -Path $failedPath -Value "$($w.Dns) | $timestamp | Timeout" -Encoding UTF8
+                    Stop-TestWorker -Worker $w
+                    $tested++
+                    continue
                 }
-                elseif ($result) {
-                    Write-Log -Message "FAIL: $($result.Dns) - $($result.Detail)" -Level Debug
+
+                # Check if process crashed
+                if ($w.Process.HasExited) {
+                    Write-Log -Message "FAIL: $($w.Dns) - Process exited" -Level Debug
                     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                    Add-Content -Path $failedPath -Value "$($result.Dns) | $timestamp | $($result.Detail)" -Encoding UTF8
+                    Add-Content -Path $failedPath -Value "$($w.Dns) | $timestamp | Process exited" -Encoding UTF8
+                    Stop-TestWorker -Worker $w
+                    $tested++
+                    continue
                 }
+
+                # Still waiting
+                $stillActive += $w
+            }
+            $workers = $stillActive
+
+            if (-not $found) {
+                Start-Sleep -Milliseconds 200
             }
 
-            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
-        }
-
-        # Stop remaining jobs if we found a working DNS
-        if ($found) {
-            $jobs | ForEach-Object {
-                Stop-Job -Job $_ -ErrorAction SilentlyContinue
-                Remove-Job -Job $_ -Force -ErrorAction SilentlyContinue
+            # Progress update every batch
+            if ($tested -gt 0 -and $tested % $Config.Workers -eq 0) {
+                $percent = [Math]::Round(($tested / $totalDns) * 100, 1)
+                Write-Log -Message "Progress: $tested / $totalDns ($percent%)" -Level Info
             }
-            break
         }
+    }
+    finally {
+        # Clean up any remaining workers
+        foreach ($w in $workers) {
+            Stop-TestWorker -Worker $w
+        }
+    }
 
-        $percent = [Math]::Round(($tested / $totalDns) * 100, 1)
-        Write-Log -Message "Progress: $tested / $totalDns ($percent%)" -Level Info
+    if (-not $found -and $tested -gt 0) {
+        Write-Log -Message "Tested $tested DNS entries, none worked." -Level Warning
     }
 
     return $found
