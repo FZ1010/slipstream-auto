@@ -89,7 +89,9 @@ Write-Host ""
 
 # ── Load DNS list ──
 
-$dnsList = Read-DnsList -Path $DnsListPath -ResolversPath $resolversPath -CustomPath $UserDnsPath -Config $config -ResultsDirectory $resultsDir
+$dnsData = Read-DnsList -Path $DnsListPath -ResolversPath $resolversPath -CustomPath $UserDnsPath -Config $config -ResultsDirectory $resultsDir
+$dnsList = $dnsData.DnsList
+$priorityCount = $dnsData.PriorityCount
 if ($dnsList.Count -eq 0) {
     Write-Log -Message "No DNS entries to test! Check your dns-list.txt file." -Level Error
     Read-Host "Press Enter to exit"
@@ -119,9 +121,27 @@ try {
 
     Write-Host ""
     Write-Log -Message "=== Phase 1: Scanning for a working DNS ===" -Level Info
-    Write-Host ""
 
-    $result = Start-DnsTesting -DnsList $dnsList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+    $result = $null
+
+    # Phase 1a: Test priority DNS first (tier 0 + tier 1)
+    if ($priorityCount -gt 0) {
+        Write-Host ""
+        Write-Log -Message "Testing $priorityCount priority DNS entries first..." -Level Info
+        $priorityList = @($dnsList[0..($priorityCount - 1)])
+        $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+    }
+
+    # Phase 1b: If no priority DNS worked, test the rest
+    if (-not $result) {
+        $remainingCount = $dnsList.Count - $priorityCount
+        if ($remainingCount -gt 0) {
+            Write-Host ""
+            Write-Log -Message "Scanning remaining $remainingCount DNS entries..." -Level Info
+            $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
+            $result = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+        }
+    }
 
     if (-not $result) {
         Write-Host ""

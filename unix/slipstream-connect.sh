@@ -106,12 +106,16 @@ echo ""
 # ── Load DNS list ──
 
 DNS_LIST=()
+PRIORITY_COUNT=0
 read_dns_list "$CUSTOM_DNS_PATH" "$DNS_LIST_PATH" "$RESOLVERS_PATH" "$RESULTS_DIR"
 
 if [[ ${#DNS_LIST[@]} -eq 0 ]]; then
     log Error "No DNS entries to test! Check your dns-list.txt file."
     exit 1
 fi
+
+# Save full list for reconnection loop
+FULL_DNS_LIST=("${DNS_LIST[@]}")
 
 # ── Cleanup on exit (Ctrl+C, kill, etc.) ──
 
@@ -140,11 +144,30 @@ trap cleanup INT TERM EXIT
 
 # ── Phase 1: Find a working DNS ──
 
+FOUND_DNS=""
+FOUND_PORT=""
+
 echo ""
 log Info "=== Phase 1: Scanning for a working DNS ==="
-echo ""
 
-start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
+# Phase 1a: Test priority DNS first (tier 0 + tier 1)
+if [[ $PRIORITY_COUNT -gt 0 ]]; then
+    echo ""
+    log Info "Testing $PRIORITY_COUNT priority DNS entries first..."
+    DNS_LIST=("${FULL_DNS_LIST[@]:0:$PRIORITY_COUNT}")
+    start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
+fi
+
+# Phase 1b: If no priority DNS worked, test the rest
+if [[ -z "$FOUND_DNS" ]]; then
+    remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
+    if [[ $remaining_count -gt 0 ]]; then
+        echo ""
+        log Info "Scanning remaining $remaining_count DNS entries..."
+        DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
+        start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
+    fi
+fi
 
 if [[ -z "$FOUND_DNS" ]]; then
     echo ""
@@ -161,6 +184,9 @@ fi
 
 echo ""
 log Info "=== Phase 2: Establishing persistent connection ==="
+
+# Restore full list for reconnection loop
+DNS_LIST=("${FULL_DNS_LIST[@]}")
 
 # Find start index
 start_index=0
