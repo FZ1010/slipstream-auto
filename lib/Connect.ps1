@@ -1,6 +1,8 @@
 # lib/Connect.ps1
 # Manages the active slipstream connection with health monitoring and auto-reconnect
 #
+# Uses temp file redirection instead of Peek()/ReadLine() to avoid .NET stream deadlocks.
+#
 # Detection logic:
 #   - "became unavailable" = connection lost (not just any WARN)
 #   - Health checks verify actual internet connectivity through the SOCKS5 proxy
@@ -17,74 +19,64 @@ function Start-SlipstreamConnection {
         [string]$ExePath
     )
 
-    $arguments = @(
-        "--domain", $Config.Domain,
-        "--congestion-control", $Config.CongestionControl,
-        "--keep-alive-interval", $Config.KeepAliveInterval,
-        "--tcp-listen-port", $Port,
-        "--resolver", $Dns
-    )
+    $outFile = [System.IO.Path]::GetTempFileName()
+    $errFile = "$outFile.err"
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $ExePath
-    $psi.Arguments = $arguments -join ' '
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
+    $arguments = "--domain $($Config.Domain) --congestion-control $($Config.CongestionControl) --keep-alive-interval $($Config.KeepAliveInterval) --tcp-listen-port $Port --resolver $Dns"
 
-    $process = [System.Diagnostics.Process]::Start($psi)
+    $process = Start-Process -FilePath $ExePath `
+        -ArgumentList $arguments `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $outFile `
+        -RedirectStandardError $errFile `
+        -PassThru
 
     # Wait for "Connection ready"
     $deadline = (Get-Date).AddSeconds($Config.Timeout + 2)
     $connected = $false
 
     while ((Get-Date) -lt $deadline -and -not $process.HasExited) {
-        Start-Sleep -Milliseconds 100
-        try {
-            if ($process.StandardOutput.Peek() -ge 0) {
-                $line = $process.StandardOutput.ReadLine()
-                if ($line -match "Connection ready") { $connected = $true; break }
-                if ($line -match "became unavailable") {
-                    if (-not $process.HasExited) { try { $process.Kill() } catch {} }
-                    $process.Dispose()
-                    return $null
-                }
-            }
-        } catch {}
-        try {
-            if ($process.StandardError.Peek() -ge 0) {
-                $line = $process.StandardError.ReadLine()
-                if ($line -match "Connection ready") { $connected = $true; break }
-                if ($line -match "became unavailable") {
-                    if (-not $process.HasExited) { try { $process.Kill() } catch {} }
-                    $process.Dispose()
-                    return $null
-                }
-            }
-        } catch {}
+        Start-Sleep -Milliseconds 200
+        $output = Read-ProcessOutput -OutFile $outFile -ErrFile $errFile
+
+        if ($output -match "became unavailable") {
+            try { if (-not $process.HasExited) { $process.Kill() } } catch {}
+            try { Remove-Item $outFile -Force } catch {}
+            try { Remove-Item $errFile -Force } catch {}
+            return $null
+        }
+
+        if ($output -match "Connection ready") {
+            $connected = $true
+            break
+        }
     }
 
     if (-not $connected) {
-        if (-not $process.HasExited) {
-            try { $process.Kill() } catch {}
-        }
-        $process.Dispose()
+        try { if (-not $process.HasExited) { $process.Kill() } } catch {}
+        try { Remove-Item $outFile -Force } catch {}
+        try { Remove-Item $errFile -Force } catch {}
         return $null
     }
 
-    return $process
+    return @{
+        Process = $process
+        OutFile = $outFile
+        ErrFile = $errFile
+    }
 }
 
 function Watch-Connection {
     param(
         [Parameter(Mandatory)]
-        [System.Diagnostics.Process]$Process,
+        [hashtable]$Connection,
         [Parameter(Mandatory)]
         [int]$Port,
         [Parameter(Mandatory)]
         [hashtable]$Config
     )
+
+    $process = $Connection.Process
 
     Write-Host ""
     Write-Log -Message "============================================" -Level Success
@@ -93,31 +85,18 @@ function Watch-Connection {
     Write-Log -Message "============================================" -Level Success
     Write-Host ""
     Write-Log -Message "Set your browser/system proxy to SOCKS5 127.0.0.1:$Port" -Level Info
-    Write-Log -Message "Health checks running every $($Config.HealthCheckInterval)s. Press Ctrl+C to stop." -Level Info
+    Write-Log -Message "Health checks every $($Config.HealthCheckInterval)s. Press Ctrl+C to stop." -Level Info
     Write-Host ""
 
     $failCount = 0
     $maxConsecutiveFails = 3
 
-    while (-not $Process.HasExited) {
+    while (-not $process.HasExited) {
         Start-Sleep -Seconds $Config.HealthCheckInterval
 
-        # Drain process output, check for "became unavailable"
-        $resolverDead = $false
-        try {
-            while ($Process.StandardOutput.Peek() -ge 0) {
-                $line = $Process.StandardOutput.ReadLine()
-                if ($line -match "became unavailable") { $resolverDead = $true }
-            }
-        } catch {}
-        try {
-            while ($Process.StandardError.Peek() -ge 0) {
-                $line = $Process.StandardError.ReadLine()
-                if ($line -match "became unavailable") { $resolverDead = $true }
-            }
-        } catch {}
-
-        if ($resolverDead) {
+        # Check output for "became unavailable"
+        $output = Read-ProcessOutput -OutFile $Connection.OutFile -ErrFile $Connection.ErrFile
+        if ($output -match "became unavailable") {
             Write-Log -Message "Resolver became unavailable - connection lost" -Level Error
             return $false
         }
@@ -150,6 +129,14 @@ function Watch-Connection {
 
     Write-Log -Message "slipstream-client process exited unexpectedly" -Level Error
     return $false
+}
+
+function Stop-Connection {
+    param([hashtable]$Connection)
+    if ($null -eq $Connection) { return }
+    try { if ($Connection.Process -and -not $Connection.Process.HasExited) { $Connection.Process.Kill() } } catch {}
+    try { if (Test-Path $Connection.OutFile) { Remove-Item $Connection.OutFile -Force } } catch {}
+    try { if (Test-Path $Connection.ErrFile) { Remove-Item $Connection.ErrFile -Force } } catch {}
 }
 
 function Start-ConnectionLoop {
@@ -192,9 +179,9 @@ function Start-ConnectionLoop {
             Write-Log -Message "Establishing connection via $dns on port $port..." -Level Info
         }
 
-        $process = Start-SlipstreamConnection -Dns $dns -Port $port -Config $Config -ExePath $ExePath
+        $connection = Start-SlipstreamConnection -Dns $dns -Port $port -Config $Config -ExePath $ExePath
 
-        if ($null -eq $process) {
+        if ($null -eq $connection) {
             Write-Log -Message "Failed to connect via $dns" -Level Warning
             $currentIndex++
             $reconnectCount++
@@ -214,10 +201,7 @@ function Start-ConnectionLoop {
 
         if (-not $internetWorks) {
             Write-Log -Message "Tunnel up via $dns but no internet, trying next..." -Level Warning
-            if (-not $process.HasExited) {
-                try { $process.Kill() } catch {}
-            }
-            $process.Dispose()
+            Stop-Connection -Connection $connection
             $currentIndex++
             $reconnectCount++
             continue
@@ -228,13 +212,10 @@ function Start-ConnectionLoop {
         Add-Content -Path $workingPath -Value "$dns | $timestamp" -Encoding UTF8
 
         # Monitor the connection
-        $stillAlive = Watch-Connection -Process $process -Port $port -Config $Config
+        $stillAlive = Watch-Connection -Connection $connection -Port $port -Config $Config
 
         # Clean up
-        if (-not $process.HasExited) {
-            try { $process.Kill() } catch {}
-        }
-        $process.Dispose()
+        Stop-Connection -Connection $connection
 
         if (-not $stillAlive) {
             Write-Log -Message "Connection dropped. Searching for new DNS..." -Level Warning

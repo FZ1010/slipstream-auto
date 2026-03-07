@@ -2,6 +2,7 @@
 # Main orchestrator for SlipStream Auto Connector
 # Finds a working DNS resolver, connects, and maintains the connection
 
+[CmdletBinding()]
 param(
     [string]$ConfigPath = "",
     [string]$DnsListPath = "",
@@ -89,41 +90,64 @@ if ($dnsList.Count -eq 0) {
     exit 1
 }
 
-# ── Phase 1: Find a working DNS ──
+# ── Ctrl+C cleanup handler ──
+# Ensure all slipstream-client processes we spawned get killed on exit
 
-Write-Host ""
-Write-Log -Message "=== Phase 1: Scanning for a working DNS ===" -Level Info
-Write-Host ""
-
-$result = Start-DnsTesting -DnsList $dnsList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
-
-if (-not $result) {
+$cleanupBlock = {
     Write-Host ""
-    Write-Log -Message "No working DNS found after testing all entries." -Level Error
-    Write-Log -Message "Things to try:" -Level Info
-    Write-Log -Message "  1. Update your dns-list.txt with fresh DNS entries" -Level Info
-    Write-Log -Message "  2. Delete results\failed-dns.txt to re-test previously failed ones" -Level Info
-    Write-Log -Message "  3. Increase Workers in config.ini for faster scanning" -Level Info
-    Write-Log -Message "  4. Try again later - some DNS resolvers are intermittent" -Level Info
-    Read-Host "Press Enter to exit"
-    exit 1
+    Write-Host "Shutting down... killing slipstream-client processes..." -ForegroundColor Yellow
+    Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Write-Host "Goodbye." -ForegroundColor Cyan
 }
 
-# ── Phase 2: Connect and maintain ──
+$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupBlock -ErrorAction SilentlyContinue
 
-Write-Host ""
-Write-Log -Message "=== Phase 2: Establishing persistent connection ===" -Level Info
+# Also handle Ctrl+C via trap
+trap {
+    & $cleanupBlock
+    break
+}
 
-# Start connection loop from the next DNS after the one we found
-$startIndex = 0
-for ($j = 0; $j -lt $dnsList.Count; $j++) {
-    if ($dnsList[$j] -eq $result.Dns) {
-        $startIndex = $j
-        break
+try {
+    # ── Phase 1: Find a working DNS ──
+
+    Write-Host ""
+    Write-Log -Message "=== Phase 1: Scanning for a working DNS ===" -Level Info
+    Write-Host ""
+
+    $result = Start-DnsTesting -DnsList $dnsList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+
+    if (-not $result) {
+        Write-Host ""
+        Write-Log -Message "No working DNS found after testing all entries." -Level Error
+        Write-Log -Message "Things to try:" -Level Info
+        Write-Log -Message "  1. Update your dns-list.txt with fresh DNS entries" -Level Info
+        Write-Log -Message "  2. Delete results\failed-dns.txt to re-test previously failed ones" -Level Info
+        Write-Log -Message "  3. Increase Workers in config.ini for faster scanning" -Level Info
+        Write-Log -Message "  4. Try again later - some DNS resolvers are intermittent" -Level Info
+        Read-Host "Press Enter to exit"
+        exit 1
     }
-}
 
-Start-ConnectionLoop -DnsList $dnsList -StartIndex $startIndex -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+    # ── Phase 2: Connect and maintain ──
+
+    Write-Host ""
+    Write-Log -Message "=== Phase 2: Establishing persistent connection ===" -Level Info
+
+    $startIndex = 0
+    for ($j = 0; $j -lt $dnsList.Count; $j++) {
+        if ($dnsList[$j] -eq $result.Dns) {
+            $startIndex = $j
+            break
+        }
+    }
+
+    Start-ConnectionLoop -DnsList $dnsList -StartIndex $startIndex -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+}
+finally {
+    # Always clean up on exit
+    Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host ""
 Write-Log -Message "SlipStream Connector has stopped." -Level Warning
