@@ -17,3 +17,6 @@ Desktop.ini
 
 # Docs / plans (dev only)
 docs/
+
+# Local Claude config
+CLAUDE.md
