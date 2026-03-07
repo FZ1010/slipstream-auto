@@ -25,7 +25,9 @@ slipstream-auto/
 │       ├── logger.sh
 │       └── test-dns.sh
 ├── config.ini              # Shared config (both platforms)
-├── dns-list.txt            # Your DNS list
+├── dns-custom.txt          # Your own DNS list (optional, highest priority)
+├── dns-resolvers.txt       # Curated resolvers (~9k entries)
+├── dns-list.txt            # Large DNS list (~25k entries)
 ├── results/                # Generated at runtime
 └── README.md
 ```
@@ -34,12 +36,27 @@ Place `slipstream-client.exe` (Windows) or `slipstream-client` (Linux) in the **
 
 ## How It Works
 
-1. Loads your DNS list (previously working DNS are tried first)
+1. Loads DNS entries using a **4-tier priority system** (see below)
 2. Tests multiple DNS entries **in parallel** — spawns `slipstream-client` for each, checks for tunnel establishment within 3 seconds
 3. Verifies **actual internet connectivity** through the SOCKS5 proxy (not just tunnel up)
 4. Connects using the first confirmed working DNS
 5. Monitors connection health and **auto-reconnects** if the connection drops
 6. Saves results so future runs are faster (working DNS prioritized, failed DNS skipped)
+
+### DNS Priority Tiers
+
+DNS entries are tested in this order. The search stops as soon as a working DNS is found:
+
+| Tier | File | Description |
+|------|------|-------------|
+| 0 | `dns-custom.txt` | Your own DNS entries (optional, highest priority) |
+| 1 | `results/dns-working.txt` | DNS that worked in previous runs (auto-generated) |
+| 2 | `dns-resolvers.txt` | Curated list of ~9,000 resolvers |
+| 3 | `dns-list.txt` | Large list of ~25,000 resolvers |
+
+Duplicates are removed across tiers, and previously failed DNS are skipped.
+
+To add your own DNS entries, create a `dns-custom.txt` file in the root folder with one IP per line. You can also pass a custom path via CLI (see Command Line Options).
 
 ## Requirements
 
@@ -52,7 +69,7 @@ Place `slipstream-client.exe` (Windows) or `slipstream-client` (Linux) in the **
 - `curl`
 - `slipstream-client` binary (Linux/macOS build)
 
-Both platforms need a `dns-list.txt` file with one DNS IP per line.
+Both platforms need DNS list files (included in the release).
 
 ## Quick Start
 
@@ -60,17 +77,19 @@ Both platforms need a `dns-list.txt` file with one DNS IP per line.
 
 1. Download/clone this repo
 2. Place `slipstream-client.exe` in the root folder
-3. Place your `dns-list.txt` in the root folder (or use the included one)
-4. **Double-click `windows\start.bat`**
-5. Wait for it to find a working DNS and connect
-6. Set your browser/system proxy to **SOCKS5 `127.0.0.1:<port>`** (the port is shown in the output)
+3. Edit `config.ini` — set your `Domain`
+4. (Optional) Add your own DNS entries to `dns-custom.txt`
+5. **Double-click `windows\start.bat`**
+6. Wait for it to find a working DNS and connect
+7. Set your browser/system proxy to **SOCKS5 `127.0.0.1:<port>`** (the port is shown in the output)
 
 ### Linux / macOS
 
 ```bash
 git clone https://github.com/FZ1010/slipstream-auto.git
 cd slipstream-auto
-# Place your slipstream-client binary and dns-list.txt in the root
+# Place your slipstream-client binary in the root
+# Edit config.ini — set your Domain
 chmod +x unix/start.sh
 ./unix/start.sh
 ```
@@ -102,6 +121,7 @@ Edit `config.ini` in the root folder (shared by both platforms):
 
   -ConfigPath <path>    Path to config.ini
   -DnsListPath <path>   Path to dns-list.txt
+  -UserDnsPath <path>   Path to your own DNS file (highest priority)
   -Workers <number>     Override parallel worker count
   -Help                 Show help
 ```
@@ -119,6 +139,7 @@ windows\start.bat -Workers 10
 
   -c, --config <path>     Path to config.ini
   -d, --dns-list <path>   Path to dns-list.txt
+  -u, --user-dns <path>   Path to your own DNS file (highest priority)
   -w, --workers <number>  Override parallel worker count
   -h, --help              Show help
 ```
@@ -133,15 +154,15 @@ Or just use `unix/start.sh`:
 
 After running, check the `results/` folder in the project root:
 
-- **`working-dns.txt`** — DNS entries that were confirmed working (with timestamps)
-- **`failed-dns.txt`** — DNS entries that failed (skipped on future runs)
+- **`dns-working.txt`** — DNS entries that were confirmed working (with timestamps)
+- **`dns-failed.txt`** — DNS entries that failed (skipped on future runs)
 - **`session.log`** — Full log of the session
 
-To re-test previously failed DNS entries, delete `results/failed-dns.txt`.
+To re-test previously failed DNS entries, delete `results/dns-failed.txt`.
 
 ## Troubleshooting
 
-- **"No working DNS found"** — Your DNS list may be outdated. Get a fresh list, or delete `results/failed-dns.txt` to retry failed ones.
+- **"No working DNS found"** — Your DNS list may be outdated. Get a fresh list, or delete `results/dns-failed.txt` to retry failed ones.
 - **"slipstream-client not found"** — Place the binary in the **root folder** (not inside windows/ or unix/).
 - **"curl not found"** — Windows: need Windows 10+. Linux: `sudo apt install curl` (or equivalent).
 - **Connection drops frequently** — Increase `HealthCheckInterval` in config.ini or try more workers to find better DNS entries.
@@ -157,4 +178,4 @@ To re-test previously failed DNS entries, delete `results/failed-dns.txt`.
 
 ## License
 
-[MIT](LICENSE)
+[CC BY-NC 4.0](LICENSE) — Free to use, share, and modify. **Commercial use is not permitted.**

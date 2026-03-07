@@ -19,6 +19,7 @@ source "$SCRIPT_DIR/lib/connect.sh"
 
 CONFIG_PATH=""
 DNS_LIST_PATH=""
+CUSTOM_DNS_PATH=""
 WORKERS_OVERRIDE=0
 SHOW_HELP=false
 
@@ -26,6 +27,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -c|--config)     CONFIG_PATH="$2"; shift 2 ;;
         -d|--dns-list)   DNS_LIST_PATH="$2"; shift 2 ;;
+        -u|--user-dns)   CUSTOM_DNS_PATH="$2"; shift 2 ;;
         -w|--workers)    WORKERS_OVERRIDE="$2"; shift 2 ;;
         -h|--help)       SHOW_HELP=true; shift ;;
         *)               echo "Unknown option: $1"; exit 1 ;;
@@ -45,12 +47,14 @@ USAGE:
 OPTIONS:
   -c, --config <path>     Path to config.ini (default: ./config.ini)
   -d, --dns-list <path>   Path to dns-list.txt (default: ./dns-list.txt)
+  -u, --user-dns <path>   Path to your own DNS file (tested first, highest priority)
   -w, --workers <number>  Override parallel worker count (default: from config)
   -h, --help              Show this message
 
 EXAMPLES:
   ./start.sh                                   # Just run and go
   ./slipstream-connect.sh -w 10                # Test 10 DNS at once
+  ./slipstream-connect.sh -u my-dns.txt        # Use your own DNS list first
   ./slipstream-connect.sh -d /path/to/dns.txt
 
 HELP
@@ -61,6 +65,8 @@ fi
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 [[ -z "$CONFIG_PATH" ]] && CONFIG_PATH="$PROJECT_ROOT/config.ini"
 [[ -z "$DNS_LIST_PATH" ]] && DNS_LIST_PATH="$PROJECT_ROOT/dns-list.txt"
+[[ -z "$CUSTOM_DNS_PATH" ]] && CUSTOM_DNS_PATH="$PROJECT_ROOT/dns-custom.txt"
+RESOLVERS_PATH="$PROJECT_ROOT/dns-resolvers.txt"
 RESULTS_DIR="$PROJECT_ROOT/results"
 EXE_PATH="$PROJECT_ROOT/slipstream-client"
 
@@ -100,7 +106,7 @@ echo ""
 # ── Load DNS list ──
 
 DNS_LIST=()
-read_dns_list "$DNS_LIST_PATH" "$RESULTS_DIR"
+read_dns_list "$CUSTOM_DNS_PATH" "$DNS_LIST_PATH" "$RESOLVERS_PATH" "$RESULTS_DIR"
 
 if [[ ${#DNS_LIST[@]} -eq 0 ]]; then
     log Error "No DNS entries to test! Check your dns-list.txt file."
@@ -143,7 +149,7 @@ if [[ -z "$FOUND_DNS" ]]; then
     log Error "No working DNS found after testing all entries."
     log Info "Things to try:"
     log Info "  1. Update your dns-list.txt with fresh DNS entries"
-    log Info "  2. Delete results/failed-dns.txt to re-test previously failed ones"
+    log Info "  2. Delete results/dns-failed.txt to re-test previously failed ones"
     log Info "  3. Increase Workers in config.ini for faster scanning"
     log Info "  4. Try again later - some DNS resolvers are intermittent"
     exit 1

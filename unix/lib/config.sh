@@ -58,36 +58,58 @@ read_config() {
     done < "$config_path"
 }
 
-read_dns_list() {
-    local dns_path="$1"
-    local results_dir="$2"
+_load_dns_file() {
+    local path="$1"
+    local -n _out_arr=$2
 
-    if [[ ! -f "$dns_path" ]]; then
-        log Error "DNS list not found at $dns_path"
-        DNS_LIST=()
+    if [[ ! -f "$path" ]]; then
         return
     fi
 
-    # Load all DNS entries (lines starting with a digit, trimmed)
-    mapfile -t all_dns < <(grep -E '^\s*[0-9]' "$dns_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$')
-    log Info "Loaded ${#all_dns[@]} DNS entries from list"
+    mapfile -t _out_arr < <(grep -E '^\s*[0-9]' "$path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$')
+}
 
-    local -A known_bad
-    local -a known_good_list=()
+_shuffle_array() {
+    local -n _arr=$1
 
-    # Load previously known-good DNS
-    local working_path="$results_dir/working-dns.txt"
-    if _is_true "${CONFIG[PrioritizeKnownGood]}" && [[ -f "$working_path" ]]; then
-        while IFS='|' read -r dns _rest; do
-            dns="${dns#"${dns%%[![:space:]]*}"}"
-            dns="${dns%"${dns##*[![:space:]]}"}"
-            [[ -n "$dns" ]] && known_good_list+=("$dns")
-        done < "$working_path"
-        log Info "Loaded ${#known_good_list[@]} previously working DNS entries"
+    if [[ ${#_arr[@]} -eq 0 ]]; then
+        return
     fi
 
-    # Load previously failed DNS
-    local failed_path="$results_dir/failed-dns.txt"
+    if command -v shuf &>/dev/null; then
+        mapfile -t _arr < <(printf '%s\n' "${_arr[@]}" | shuf)
+    else
+        # macOS fallback
+        mapfile -t _arr < <(printf '%s\n' "${_arr[@]}" | awk 'BEGIN{srand()}{print rand()"\t"$0}' | sort -n | cut -f2-)
+    fi
+}
+
+_load_tier() {
+    local path="$1"
+    local -n _tier_out=$2
+    local -n _tier_seen=$3
+    local -n _tier_bad=$4
+
+    local -a raw=()
+    _load_dns_file "$path" raw
+
+    for dns in "${raw[@]}"; do
+        if [[ ! -v "_tier_bad[$dns]" && ! -v "_tier_seen[$dns]" ]]; then
+            _tier_out+=("$dns")
+            _tier_seen["$dns"]=1
+        fi
+    done
+}
+
+read_dns_list() {
+    local custom_path="$1"
+    local dns_path="$2"
+    local resolvers_path="$3"
+    local results_dir="$4"
+
+    # ── Load known-bad DNS ──
+    local -A known_bad
+    local failed_path="$results_dir/dns-failed.txt"
     if _is_true "${CONFIG[SkipPreviouslyFailed]}" && [[ -f "$failed_path" ]]; then
         while IFS='|' read -r dns _rest; do
             dns="${dns#"${dns%%[![:space:]]*}"}"
@@ -97,43 +119,55 @@ read_dns_list() {
         log Info "Loaded ${#known_bad[@]} previously failed DNS entries to skip"
     fi
 
-    # Filter out known-bad
-    local -a filtered=()
-    local skipped=0
-    for dns in "${all_dns[@]}"; do
-        if [[ -v "known_bad[$dns]" ]]; then
-            skipped=$((skipped + 1))
-        else
-            filtered+=("$dns")
-        fi
-    done
-    [[ $skipped -gt 0 ]] && log Info "Skipping $skipped previously failed DNS entries"
+    # Track seen DNS to avoid duplicates across tiers
+    local -A seen
 
-    # Separate known-good from rest
-    local -A good_set
-    for dns in "${known_good_list[@]}"; do good_set["$dns"]=1; done
-
-    local -a prioritized=()
-    local -a rest=()
-    for dns in "${filtered[@]}"; do
-        if [[ -v "good_set[$dns]" ]]; then
-            prioritized+=("$dns")
-        else
-            rest+=("$dns")
-        fi
-    done
-
-    # Shuffle rest if configured
-    if _is_true "${CONFIG[ShuffleDns]}" && [[ ${#rest[@]} -gt 0 ]]; then
-        if command -v shuf &>/dev/null; then
-            mapfile -t rest < <(printf '%s\n' "${rest[@]}" | shuf)
-        else
-            # macOS fallback: use sort -R or awk
-            mapfile -t rest < <(printf '%s\n' "${rest[@]}" | awk 'BEGIN{srand()}{print rand()"\t"$0}' | sort -n | cut -f2-)
-        fi
+    # ── Tier 0: User's custom DNS file ──
+    local -a tier0=()
+    if [[ -f "$custom_path" ]]; then
+        _load_tier "$custom_path" tier0 seen known_bad
+        log Info "Tier 0 (dns-custom.txt): ${#tier0[@]} entries"
     fi
 
-    # Final list: prioritized first, then rest
-    DNS_LIST=("${prioritized[@]}" "${rest[@]}")
-    log Info "DNS queue: ${#prioritized[@]} prioritized + ${#rest[@]} others = ${#DNS_LIST[@]} total"
+    # ── Tier 1: Previously working DNS ──
+    local -a tier1=()
+    local working_path="$results_dir/dns-working.txt"
+    if _is_true "${CONFIG[PrioritizeKnownGood]}" && [[ -f "$working_path" ]]; then
+        while IFS='|' read -r dns _rest; do
+            dns="${dns#"${dns%%[![:space:]]*}"}"
+            dns="${dns%"${dns##*[![:space:]]}"}"
+            if [[ -n "$dns" && ! -v "known_bad[$dns]" && ! -v "seen[$dns]" ]]; then
+                tier1+=("$dns")
+                seen["$dns"]=1
+            fi
+        done < "$working_path"
+    fi
+    log Info "Tier 1 (previously working): ${#tier1[@]} entries"
+
+    # ── Tier 2: Curated resolvers list ──
+    local -a tier2=()
+    _load_tier "$resolvers_path" tier2 seen known_bad
+
+    if _is_true "${CONFIG[ShuffleDns]}" && [[ ${#tier2[@]} -gt 0 ]]; then
+        _shuffle_array tier2
+    fi
+    log Info "Tier 2 (dns-resolvers.txt): ${#tier2[@]} entries"
+
+    # ── Tier 3: Large DNS list ──
+    local -a tier3=()
+
+    if [[ -f "$dns_path" ]]; then
+        _load_tier "$dns_path" tier3 seen known_bad
+    else
+        log Warning "DNS list not found at $dns_path"
+    fi
+
+    if _is_true "${CONFIG[ShuffleDns]}" && [[ ${#tier3[@]} -gt 0 ]]; then
+        _shuffle_array tier3
+    fi
+    log Info "Tier 3 (dns-list.txt): ${#tier3[@]} entries"
+
+    # ── Combine: tier0 → tier1 → tier2 → tier3 ──
+    DNS_LIST=("${tier0[@]}" "${tier1[@]}" "${tier2[@]}" "${tier3[@]}")
+    log Info "DNS queue: ${#tier0[@]} + ${#tier1[@]} + ${#tier2[@]} + ${#tier3[@]} = ${#DNS_LIST[@]} total"
 }

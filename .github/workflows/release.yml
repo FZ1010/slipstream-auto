@@ -40,7 +40,7 @@ jobs:
           mkdir -p dist/slipstream-auto-windows/lib
           cp windows/start.bat windows/slipstream-connect.ps1 dist/slipstream-auto-windows/
           cp windows/lib/*.ps1 dist/slipstream-auto-windows/lib/
-          cp config.ini dns-list.txt README.md LICENSE dist/slipstream-auto-windows/
+          cp config.ini dns-list.txt dns-resolvers.txt README.md LICENSE dist/slipstream-auto-windows/
           cp binaries/slipstream-client-windows-amd64.exe dist/slipstream-auto-windows/slipstream-client.exe
 
           # Patch paths for flat layout (no windows/ subfolder in release)
@@ -53,7 +53,7 @@ jobs:
           mkdir -p dist/slipstream-auto-linux-amd64/lib
           cp unix/start.sh unix/slipstream-connect.sh dist/slipstream-auto-linux-amd64/
           cp unix/lib/*.sh dist/slipstream-auto-linux-amd64/lib/
-          cp config.ini dns-list.txt README.md LICENSE dist/slipstream-auto-linux-amd64/
+          cp config.ini dns-list.txt dns-resolvers.txt README.md LICENSE dist/slipstream-auto-linux-amd64/
           cp binaries/slipstream-client-linux-amd64 dist/slipstream-auto-linux-amd64/slipstream-client
 
           # Patch paths for flat layout
@@ -68,7 +68,7 @@ jobs:
           mkdir -p dist/slipstream-auto-macos-arm64/lib
           cp unix/start.sh unix/slipstream-connect.sh dist/slipstream-auto-macos-arm64/
           cp unix/lib/*.sh dist/slipstream-auto-macos-arm64/lib/
-          cp config.ini dns-list.txt README.md LICENSE dist/slipstream-auto-macos-arm64/
+          cp config.ini dns-list.txt dns-resolvers.txt README.md LICENSE dist/slipstream-auto-macos-arm64/
           cp binaries/slipstream-client-darwin-arm64 dist/slipstream-auto-macos-arm64/slipstream-client
 
           sed -i 's|PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"|PROJECT_ROOT="$SCRIPT_DIR"|' dist/slipstream-auto-macos-arm64/slipstream-connect.sh
@@ -82,7 +82,7 @@ jobs:
           mkdir -p dist/slipstream-auto-macos-amd64/lib
           cp unix/start.sh unix/slipstream-connect.sh dist/slipstream-auto-macos-amd64/
           cp unix/lib/*.sh dist/slipstream-auto-macos-amd64/lib/
-          cp config.ini dns-list.txt README.md LICENSE dist/slipstream-auto-macos-amd64/
+          cp config.ini dns-list.txt dns-resolvers.txt README.md LICENSE dist/slipstream-auto-macos-amd64/
           cp binaries/slipstream-client-darwin-amd64 dist/slipstream-auto-macos-amd64/slipstream-client
 
           sed -i 's|PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"|PROJECT_ROOT="$SCRIPT_DIR"|' dist/slipstream-auto-macos-amd64/slipstream-connect.sh

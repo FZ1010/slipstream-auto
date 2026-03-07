@@ -132,7 +132,7 @@ start_connection_loop() {
     local exe_path="$2"
     local results_dir="$3"
 
-    local working_path="$results_dir/working-dns.txt"
+    local working_path="$results_dir/dns-working.txt"
     local reconnect_count=0
     local current_index=$start_index
     local total=${#DNS_LIST[@]}

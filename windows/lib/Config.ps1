@@ -62,33 +62,15 @@ function Read-DnsList {
     param(
         [Parameter(Mandatory)]
         [string]$Path,
+        [string]$ResolversPath,
+        [string]$CustomPath,
         [hashtable]$Config,
         [string]$ResultsDirectory
     )
 
-    if (-not (Test-Path $Path)) {
-        Write-Log -Message "DNS list not found at $Path" -Level Error
-        return @()
-    }
-
-    # Load all DNS entries, trim whitespace, skip empty lines
-    $allDns = @(Get-Content -Path $Path -Encoding UTF8 | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -match '^\d' })
-    Write-Log -Message "Loaded $($allDns.Count) DNS entries from list" -Level Info
-
-    $knownGood = @()
+    # ── Load known-bad DNS ──
     $knownBad = @{}
-
-    # Load previously known-good DNS
-    $workingPath = Join-Path $ResultsDirectory "working-dns.txt"
-    if ($Config.PrioritizeKnownGood -and (Test-Path $workingPath)) {
-        $knownGood = @(Get-Content -Path $workingPath -Encoding UTF8 |
-            ForEach-Object { ($_ -split '\|')[0].Trim() } |
-            Where-Object { $_ -ne '' })
-        Write-Log -Message "Loaded $($knownGood.Count) previously working DNS entries" -Level Info
-    }
-
-    # Load previously failed DNS
-    $failedPath = Join-Path $ResultsDirectory "failed-dns.txt"
+    $failedPath = Join-Path $ResultsDirectory "dns-failed.txt"
     if ($Config.SkipPreviouslyFailed -and (Test-Path $failedPath)) {
         Get-Content -Path $failedPath -Encoding UTF8 |
             ForEach-Object { ($_ -split '\|')[0].Trim() } |
@@ -97,28 +79,63 @@ function Read-DnsList {
         Write-Log -Message "Loaded $($knownBad.Count) previously failed DNS entries to skip" -Level Info
     }
 
-    # Filter out known-bad
-    $filtered = @($allDns | Where-Object { -not $knownBad.ContainsKey($_) })
-    $skipped = $allDns.Count - $filtered.Count
-    if ($skipped -gt 0) {
-        Write-Log -Message "Skipping $skipped previously failed DNS entries" -Level Info
+    # Track seen DNS to avoid duplicates across tiers
+    $seen = @{}
+
+    # ── Tier 0: User's custom DNS file ──
+    $tier0 = @()
+    if ($CustomPath -and (Test-Path $CustomPath)) {
+        $tier0 = @(Get-Content -Path $CustomPath -Encoding UTF8 |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -ne '' -and $_ -match '^\d' -and -not $knownBad.ContainsKey($_) -and -not $seen.ContainsKey($_) } |
+            ForEach-Object { $seen[$_] = $true; $_ })
+        Write-Log -Message "Tier 0 (dns-custom.txt): $($tier0.Count) entries" -Level Info
     }
 
-    # Separate known-good from the rest
-    $knownGoodSet = @{}
-    $knownGood | ForEach-Object { $knownGoodSet[$_] = $true }
-
-    $prioritized = @($filtered | Where-Object { $knownGoodSet.ContainsKey($_) })
-    $rest = @($filtered | Where-Object { -not $knownGoodSet.ContainsKey($_) })
-
-    # Shuffle the rest if configured
-    if ($Config.ShuffleDns -and $rest.Count -gt 0) {
-        $rest = $rest | Get-Random -Count $rest.Count
+    # ── Tier 1: Previously working DNS ──
+    $tier1 = @()
+    $workingPath = Join-Path $ResultsDirectory "dns-working.txt"
+    if ($Config.PrioritizeKnownGood -and (Test-Path $workingPath)) {
+        $tier1 = @(Get-Content -Path $workingPath -Encoding UTF8 |
+            ForEach-Object { ($_ -split '\|')[0].Trim() } |
+            Where-Object { $_ -ne '' -and -not $knownBad.ContainsKey($_) -and -not $seen.ContainsKey($_) } |
+            ForEach-Object { $seen[$_] = $true; $_ })
     }
+    Write-Log -Message "Tier 1 (previously working): $($tier1.Count) entries" -Level Info
 
-    # Known-good first, then shuffled rest
-    $final = @($prioritized) + @($rest)
-    Write-Log -Message "DNS queue: $($prioritized.Count) prioritized + $($rest.Count) others = $($final.Count) total" -Level Info
+    # ── Tier 2: Curated resolvers list ──
+    $tier2 = @()
+    if ($ResolversPath -and (Test-Path $ResolversPath)) {
+        $tier2 = @(Get-Content -Path $ResolversPath -Encoding UTF8 |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -ne '' -and $_ -match '^\d' -and -not $knownBad.ContainsKey($_) -and -not $seen.ContainsKey($_) } |
+            ForEach-Object { $seen[$_] = $true; $_ })
+
+        if ($Config.ShuffleDns -and $tier2.Count -gt 0) {
+            $tier2 = $tier2 | Get-Random -Count $tier2.Count
+        }
+    }
+    Write-Log -Message "Tier 2 (dns-resolvers.txt): $($tier2.Count) entries" -Level Info
+
+    # ── Tier 3: Large DNS list ──
+    $tier3 = @()
+    if (Test-Path $Path) {
+        $tier3 = @(Get-Content -Path $Path -Encoding UTF8 |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -ne '' -and $_ -match '^\d' -and -not $knownBad.ContainsKey($_) -and -not $seen.ContainsKey($_) } |
+            ForEach-Object { $seen[$_] = $true; $_ })
+
+        if ($Config.ShuffleDns -and $tier3.Count -gt 0) {
+            $tier3 = $tier3 | Get-Random -Count $tier3.Count
+        }
+    } else {
+        Write-Log -Message "DNS list not found at $Path" -Level Warning
+    }
+    Write-Log -Message "Tier 3 (dns-list.txt): $($tier3.Count) entries" -Level Info
+
+    # ── Combine: tier0 -> tier1 -> tier2 -> tier3 ──
+    $final = @($tier0) + @($tier1) + @($tier2) + @($tier3)
+    Write-Log -Message "DNS queue: $($tier0.Count) + $($tier1.Count) + $($tier2.Count) + $($tier3.Count) = $($final.Count) total" -Level Info
 
     return $final
 }

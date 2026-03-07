@@ -131,8 +131,8 @@ start_dns_testing() {
     local exe_path="$1"
     local results_dir="$2"
 
-    local working_path="$results_dir/working-dns.txt"
-    local failed_path="$results_dir/failed-dns.txt"
+    local working_path="$results_dir/dns-working.txt"
+    local failed_path="$results_dir/dns-failed.txt"
     mkdir -p "$results_dir"
 
     local total=${#DNS_LIST[@]}
