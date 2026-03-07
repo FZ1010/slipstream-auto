@@ -6,8 +6,8 @@ Built for situations where internet access requires tunneling through specific D
 
 ## How It Works
 
-1. Loads your DNS list and shuffles it (previously working DNS are tried first)
-2. Tests multiple DNS entries **in parallel** — spawns `slipstream-client.exe` for each, checks for tunnel establishment within 3 seconds
+1. Loads your DNS list (previously working DNS are tried first)
+2. Tests multiple DNS entries **in parallel** — spawns `slipstream-client` for each, checks for tunnel establishment within 3 seconds
 3. Verifies **actual internet connectivity** through the SOCKS5 proxy (not just tunnel up)
 4. Connects using the first confirmed working DNS
 5. Monitors connection health and **auto-reconnects** if the connection drops
@@ -15,11 +15,20 @@ Built for situations where internet access requires tunneling through specific D
 
 ## Requirements
 
-- **Windows 10/11** (PowerShell 5.1+ and curl.exe are included)
-- **slipstream-client.exe** — place it in the same folder as the scripts
-- **dns-list.txt** — one DNS IP per line
+**Windows:**
+- Windows 10/11 (PowerShell 5.1+ and curl.exe are included)
+- `slipstream-client.exe`
+
+**Linux / macOS:**
+- Bash 4.0+
+- `curl`
+- `slipstream-client` binary (Linux/macOS build)
+
+Both platforms need a `dns-list.txt` file with one DNS IP per line.
 
 ## Quick Start
+
+### Windows
 
 1. Download/clone this repo
 2. Place `slipstream-client.exe` in the root folder
@@ -28,9 +37,19 @@ Built for situations where internet access requires tunneling through specific D
 5. Wait for it to find a working DNS and connect
 6. Set your browser/system proxy to **SOCKS5 `127.0.0.1:<port>`** (the port is shown in the output)
 
+### Linux / macOS
+
+```bash
+git clone https://github.com/FZ1010/slipstream-auto.git
+cd slipstream-auto
+# Place your slipstream-client binary and dns-list.txt here
+chmod +x start.sh
+./start.sh
+```
+
 ## Configuration
 
-Edit `config.ini` to customize behavior:
+Edit `config.ini` to customize behavior (shared by both Windows and Linux versions):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -48,12 +67,13 @@ Edit `config.ini` to customize behavior:
 
 ## Command Line Options
 
+### Windows (PowerShell)
+
 ```
 .\slipstream-connect.ps1 [options]
 
-Options:
-  -ConfigPath <path>    Path to config.ini (default: .\config.ini)
-  -DnsListPath <path>   Path to dns-list.txt (default: .\dns-list.txt)
+  -ConfigPath <path>    Path to config.ini
+  -DnsListPath <path>   Path to dns-list.txt
   -Workers <number>     Override parallel worker count
   -Help                 Show help
 ```
@@ -62,6 +82,23 @@ Or just use `start.bat` which passes arguments through:
 
 ```
 start.bat -Workers 10
+```
+
+### Linux / macOS (Bash)
+
+```
+./slipstream-connect.sh [options]
+
+  -c, --config <path>     Path to config.ini
+  -d, --dns-list <path>   Path to dns-list.txt
+  -w, --workers <number>  Override parallel worker count
+  -h, --help              Show help
+```
+
+Or just use `start.sh`:
+
+```bash
+./start.sh -w 10
 ```
 
 ## Output Files
@@ -77,10 +114,11 @@ To re-test previously failed DNS entries, delete `results/failed-dns.txt`.
 ## Troubleshooting
 
 - **"No working DNS found"** — Your DNS list may be outdated. Get a fresh list, or delete `results/failed-dns.txt` to retry failed ones.
-- **"slipstream-client.exe not found"** — Place the executable in the same folder as the scripts.
-- **"curl.exe not found"** — You need Windows 10 or newer. For older systems, install curl manually.
+- **"slipstream-client not found"** — Place the binary in the same folder as the scripts.
+- **"curl not found"** — Windows: need Windows 10+. Linux: `sudo apt install curl` (or equivalent).
 - **Connection drops frequently** — Increase `HealthCheckInterval` in config.ini or try more workers to find better DNS entries.
 - **Too slow** — Increase `Workers` in config.ini (e.g., 10 or 20). More workers = more parallel tests.
+- **Script stuck / can't Ctrl+C** — The script registers cleanup handlers. If it's truly stuck, close the terminal window. Any orphaned `slipstream-client` processes can be killed manually (`taskkill /F /IM slipstream-client.exe` on Windows, `pkill slipstream-client` on Linux).
 
 ## Contributing
 
