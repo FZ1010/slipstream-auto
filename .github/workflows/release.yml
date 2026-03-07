@@ -1,0 +1,122 @@
+name: Release
+
+# Trigger: push a tag like v1.0.0, v2.1.3, etc.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch slipstream-client binaries
+        run: |
+          RELEASE_TAG=$(curl -s https://api.github.com/repos/AliRezaBeigy/slipstream-rust-deploy/releases/latest | jq -r '.tag_name')
+          BASE_URL="https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/download/${RELEASE_TAG}"
+
+          mkdir -p binaries
+          curl -sL -o binaries/slipstream-client-windows-amd64.exe "${BASE_URL}/slipstream-client-windows-amd64.exe"
+          curl -sL -o binaries/slipstream-client-linux-amd64     "${BASE_URL}/slipstream-client-linux-amd64"
+          curl -sL -o binaries/slipstream-client-darwin-arm64    "${BASE_URL}/slipstream-client-darwin-arm64"
+          curl -sL -o binaries/slipstream-client-darwin-amd64    "${BASE_URL}/slipstream-client-darwin-amd64"
+
+          chmod +x binaries/slipstream-client-linux-amd64
+          chmod +x binaries/slipstream-client-darwin-arm64
+          chmod +x binaries/slipstream-client-darwin-amd64
+
+      - name: Build Windows package
+        run: |
+          mkdir -p dist/slipstream-auto-windows/lib
+          cp windows/start.bat windows/slipstream-connect.ps1 dist/slipstream-auto-windows/
+          cp windows/lib/*.ps1 dist/slipstream-auto-windows/lib/
+          cp config.ini dns-list.txt README.md LICENSE dist/slipstream-auto-windows/
+          cp binaries/slipstream-client-windows-amd64.exe dist/slipstream-auto-windows/slipstream-client.exe
+
+          # Patch paths for flat layout (no windows/ subfolder in release)
+          sed -i 's|Split-Path $scriptRoot -Parent|$scriptRoot|' dist/slipstream-auto-windows/slipstream-connect.ps1
+
+          cd dist && zip -r ../slipstream-auto-${{ steps.version.outputs.VERSION }}-windows-amd64.zip slipstream-auto-windows
+
+      - name: Build Linux package
+        run: |
+          mkdir -p dist/slipstream-auto-linux-amd64/lib
+          cp unix/start.sh unix/slipstream-connect.sh dist/slipstream-auto-linux-amd64/
+          cp unix/lib/*.sh dist/slipstream-auto-linux-amd64/lib/
+          cp config.ini dns-list.txt README.md LICENSE dist/slipstream-auto-linux-amd64/
+          cp binaries/slipstream-client-linux-amd64 dist/slipstream-auto-linux-amd64/slipstream-client
+
+          # Patch paths for flat layout
+          sed -i 's|PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"|PROJECT_ROOT="$SCRIPT_DIR"|' dist/slipstream-auto-linux-amd64/slipstream-connect.sh
+          sed -i 's|PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"|PROJECT_ROOT="$SCRIPT_DIR"|' dist/slipstream-auto-linux-amd64/start.sh
+
+          chmod +x dist/slipstream-auto-linux-amd64/*.sh dist/slipstream-auto-linux-amd64/lib/*.sh dist/slipstream-auto-linux-amd64/slipstream-client
+          cd dist && tar czf ../slipstream-auto-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz slipstream-auto-linux-amd64
+
+      - name: Build macOS ARM package
+        run: |
+          mkdir -p dist/slipstream-auto-macos-arm64/lib
+          cp unix/start.sh unix/slipstream-connect.sh dist/slipstream-auto-macos-arm64/
+          cp unix/lib/*.sh dist/slipstream-auto-macos-arm64/lib/
+          cp config.ini dns-list.txt README.md LICENSE dist/slipstream-auto-macos-arm64/
+          cp binaries/slipstream-client-darwin-arm64 dist/slipstream-auto-macos-arm64/slipstream-client
+
+          sed -i 's|PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"|PROJECT_ROOT="$SCRIPT_DIR"|' dist/slipstream-auto-macos-arm64/slipstream-connect.sh
+          sed -i 's|PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"|PROJECT_ROOT="$SCRIPT_DIR"|' dist/slipstream-auto-macos-arm64/start.sh
+
+          chmod +x dist/slipstream-auto-macos-arm64/*.sh dist/slipstream-auto-macos-arm64/lib/*.sh dist/slipstream-auto-macos-arm64/slipstream-client
+          cd dist && tar czf ../slipstream-auto-${{ steps.version.outputs.VERSION }}-macos-arm64.tar.gz slipstream-auto-macos-arm64
+
+      - name: Build macOS Intel package
+        run: |
+          mkdir -p dist/slipstream-auto-macos-amd64/lib
+          cp unix/start.sh unix/slipstream-connect.sh dist/slipstream-auto-macos-amd64/
+          cp unix/lib/*.sh dist/slipstream-auto-macos-amd64/lib/
+          cp config.ini dns-list.txt README.md LICENSE dist/slipstream-auto-macos-amd64/
+          cp binaries/slipstream-client-darwin-amd64 dist/slipstream-auto-macos-amd64/slipstream-client
+
+          sed -i 's|PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"|PROJECT_ROOT="$SCRIPT_DIR"|' dist/slipstream-auto-macos-amd64/slipstream-connect.sh
+          sed -i 's|PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"|PROJECT_ROOT="$SCRIPT_DIR"|' dist/slipstream-auto-macos-amd64/start.sh
+
+          chmod +x dist/slipstream-auto-macos-amd64/*.sh dist/slipstream-auto-macos-amd64/lib/*.sh dist/slipstream-auto-macos-amd64/slipstream-client
+          cd dist && tar czf ../slipstream-auto-${{ steps.version.outputs.VERSION }}-macos-amd64.tar.gz slipstream-auto-macos-amd64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.version.outputs.VERSION }}
+          body: |
+            ## SlipStream Auto ${{ steps.version.outputs.VERSION }}
+
+            ### Downloads (includes slipstream-client)
+
+            | Platform | File |
+            |----------|------|
+            | Windows (x64) | `slipstream-auto-${{ steps.version.outputs.VERSION }}-windows-amd64.zip` |
+            | Linux (x64) | `slipstream-auto-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz` |
+            | macOS (Apple Silicon) | `slipstream-auto-${{ steps.version.outputs.VERSION }}-macos-arm64.tar.gz` |
+            | macOS (Intel) | `slipstream-auto-${{ steps.version.outputs.VERSION }}-macos-amd64.tar.gz` |
+
+            ### Quick Start
+
+            1. Download and extract for your platform
+            2. Edit `config.ini` — set your `Domain`
+            3. Run `start.bat` (Windows) or `./start.sh` (Linux/macOS)
+            4. Set your browser proxy to SOCKS5 `127.0.0.1:<port>` shown in output
+
+            slipstream-client binaries from [AliRezaBeigy/slipstream-rust-deploy](https://github.com/AliRezaBeigy/slipstream-rust-deploy)
+          files: |
+            slipstream-auto-${{ steps.version.outputs.VERSION }}-windows-amd64.zip
+            slipstream-auto-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz
+            slipstream-auto-${{ steps.version.outputs.VERSION }}-macos-arm64.tar.gz
+            slipstream-auto-${{ steps.version.outputs.VERSION }}-macos-amd64.tar.gz
