@@ -1,6 +1,6 @@
 # SlipStream Auto
 
-Automatically finds a working DNS resolver from a large list, connects to the internet via [slipstream-client](https://github.com/nicholasgasior/slipstream), and keeps the connection alive with auto-reconnect.
+Automatically finds a working DNS resolver from a large list, connects to the internet via `slipstream-client`, and keeps the connection alive with auto-reconnect.
 
 Built for situations where internet access requires tunneling through specific DNS resolvers, and you have a list of thousands of candidates but no time to test them one by one.
 
