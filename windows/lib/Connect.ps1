@@ -153,7 +153,7 @@ function Start-ConnectionLoop {
         [string]$ResultsDirectory
     )
 
-    $workingPath = Join-Path $ResultsDirectory "working-dns.txt"
+    $workingPath = Join-Path $ResultsDirectory "dns-working.txt"
     $reconnectCount = 0
     $currentIndex = $StartIndex
 

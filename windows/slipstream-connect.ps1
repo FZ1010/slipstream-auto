@@ -6,6 +6,7 @@
 param(
     [string]$ConfigPath = "",
     [string]$DnsListPath = "",
+    [string]$UserDnsPath = "",
     [int]$Workers = 0,
     [switch]$Help
 )
@@ -34,12 +35,14 @@ USAGE:
 OPTIONS:
   -ConfigPath <path>    Path to config.ini (default: .\config.ini)
   -DnsListPath <path>   Path to dns-list.txt (default: .\dns-list.txt)
+  -UserDnsPath <path>   Path to your own DNS file (tested first, highest priority)
   -Workers <number>     Override parallel worker count (default: from config)
   -Help                 Show this message
 
 EXAMPLES:
   .\start.bat                              # Just double-click and go
   .\slipstream-connect.ps1 -Workers 10     # Test 10 DNS at once
+  .\slipstream-connect.ps1 -UserDnsPath "C:\my-dns.txt"
   .\slipstream-connect.ps1 -DnsListPath "C:\my-dns.txt"
 
 "@
@@ -50,6 +53,8 @@ EXAMPLES:
 $projectRoot = Split-Path $scriptRoot -Parent
 if (-not $ConfigPath) { $ConfigPath = Join-Path $projectRoot "config.ini" }
 if (-not $DnsListPath) { $DnsListPath = Join-Path $projectRoot "dns-list.txt" }
+if (-not $UserDnsPath) { $UserDnsPath = Join-Path $projectRoot "dns-custom.txt" }
+$resolversPath = Join-Path $projectRoot "dns-resolvers.txt"
 $resultsDir = Join-Path $projectRoot "results"
 $exePath = Join-Path $projectRoot "slipstream-client.exe"
 
@@ -84,7 +89,7 @@ Write-Host ""
 
 # ── Load DNS list ──
 
-$dnsList = Read-DnsList -Path $DnsListPath -Config $config -ResultsDirectory $resultsDir
+$dnsList = Read-DnsList -Path $DnsListPath -ResolversPath $resolversPath -CustomPath $UserDnsPath -Config $config -ResultsDirectory $resultsDir
 if ($dnsList.Count -eq 0) {
     Write-Log -Message "No DNS entries to test! Check your dns-list.txt file." -Level Error
     Read-Host "Press Enter to exit"
@@ -123,7 +128,7 @@ try {
         Write-Log -Message "No working DNS found after testing all entries." -Level Error
         Write-Log -Message "Things to try:" -Level Info
         Write-Log -Message "  1. Update your dns-list.txt with fresh DNS entries" -Level Info
-        Write-Log -Message "  2. Delete results\failed-dns.txt to re-test previously failed ones" -Level Info
+        Write-Log -Message "  2. Delete results\dns-failed.txt to re-test previously failed ones" -Level Info
         Write-Log -Message "  3. Increase Workers in config.ini for faster scanning" -Level Info
         Write-Log -Message "  4. Try again later - some DNS resolvers are intermittent" -Level Info
         Read-Host "Press Enter to exit"

@@ -147,8 +147,8 @@ function Start-DnsTesting {
         [string]$ResultsDirectory
     )
 
-    $workingPath = Join-Path $ResultsDirectory "working-dns.txt"
-    $failedPath = Join-Path $ResultsDirectory "failed-dns.txt"
+    $workingPath = Join-Path $ResultsDirectory "dns-working.txt"
+    $failedPath = Join-Path $ResultsDirectory "dns-failed.txt"
 
     if (-not (Test-Path $ResultsDirectory)) {
         New-Item -ItemType Directory -Path $ResultsDirectory -Force | Out-Null
