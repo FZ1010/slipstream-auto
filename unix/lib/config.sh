@@ -18,6 +18,14 @@ CONFIG[ShuffleDns]="true"
 CONFIG[PrioritizeKnownGood]="true"
 CONFIG[SkipPreviouslyFailed]="true"
 
+# Helper: check if a config value is truthy (true, yes, 1)
+_is_true() {
+    case "${1,,}" in
+        true|yes|1) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 read_config() {
     local config_path="$1"
 
@@ -69,7 +77,7 @@ read_dns_list() {
 
     # Load previously known-good DNS
     local working_path="$results_dir/working-dns.txt"
-    if [[ "${CONFIG[PrioritizeKnownGood]}" == "true" && -f "$working_path" ]]; then
+    if _is_true "${CONFIG[PrioritizeKnownGood]}" && [[ -f "$working_path" ]]; then
         while IFS='|' read -r dns _rest; do
             dns="${dns#"${dns%%[![:space:]]*}"}"
             dns="${dns%"${dns##*[![:space:]]}"}"
@@ -80,7 +88,7 @@ read_dns_list() {
 
     # Load previously failed DNS
     local failed_path="$results_dir/failed-dns.txt"
-    if [[ "${CONFIG[SkipPreviouslyFailed]}" == "true" && -f "$failed_path" ]]; then
+    if _is_true "${CONFIG[SkipPreviouslyFailed]}" && [[ -f "$failed_path" ]]; then
         while IFS='|' read -r dns _rest; do
             dns="${dns#"${dns%%[![:space:]]*}"}"
             dns="${dns%"${dns##*[![:space:]]}"}"
@@ -94,12 +102,12 @@ read_dns_list() {
     local skipped=0
     for dns in "${all_dns[@]}"; do
         if [[ -v "known_bad[$dns]" ]]; then
-            ((skipped++))
+            skipped=$((skipped + 1))
         else
             filtered+=("$dns")
         fi
     done
-    ((skipped > 0)) && log Info "Skipping $skipped previously failed DNS entries"
+    [[ $skipped -gt 0 ]] && log Info "Skipping $skipped previously failed DNS entries"
 
     # Separate known-good from rest
     local -A good_set
@@ -116,8 +124,13 @@ read_dns_list() {
     done
 
     # Shuffle rest if configured
-    if [[ "${CONFIG[ShuffleDns]}" == "true" && ${#rest[@]} -gt 0 ]]; then
-        mapfile -t rest < <(printf '%s\n' "${rest[@]}" | shuf)
+    if _is_true "${CONFIG[ShuffleDns]}" && [[ ${#rest[@]} -gt 0 ]]; then
+        if command -v shuf &>/dev/null; then
+            mapfile -t rest < <(printf '%s\n' "${rest[@]}" | shuf)
+        else
+            # macOS fallback: use sort -R or awk
+            mapfile -t rest < <(printf '%s\n' "${rest[@]}" | awk 'BEGIN{srand()}{print rand()"\t"$0}' | sort -n | cut -f2-)
+        fi
     fi
 
     # Final list: prioritized first, then rest

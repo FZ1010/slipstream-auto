@@ -3,7 +3,9 @@
 # Main orchestrator for SlipStream Auto Connector (Linux/macOS)
 # Finds a working DNS resolver, connects, and maintains the connection
 
-set -euo pipefail
+set -uo pipefail
+# NOTE: -e is intentionally omitted. Arithmetic like ((x++)) returns 1 when x=0,
+# which would kill the script under -e. We handle errors explicitly.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -70,7 +72,7 @@ init_logger "$RESULTS_DIR"
 
 if [[ ! -f "$EXE_PATH" ]]; then
     log Error "slipstream-client not found!"
-    log Error "Place it in: $SCRIPT_DIR"
+    log Error "Place it in: $PROJECT_ROOT"
     log Info "Make sure it's executable: chmod +x slipstream-client"
     exit 1
 fi
@@ -113,7 +115,7 @@ cleanup() {
 
     # Kill worker processes
     for pid in "${WORKER_PIDS[@]}"; do
-        kill "$pid" 2>/dev/null
+        kill "$pid" 2>/dev/null || true
     done
 
     # Kill active connection
