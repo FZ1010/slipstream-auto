@@ -55,11 +55,12 @@ HELP
     exit 0
 fi
 
-# Resolve paths
-[[ -z "$CONFIG_PATH" ]] && CONFIG_PATH="$SCRIPT_DIR/config.ini"
-[[ -z "$DNS_LIST_PATH" ]] && DNS_LIST_PATH="$SCRIPT_DIR/dns-list.txt"
-RESULTS_DIR="$SCRIPT_DIR/results"
-EXE_PATH="$SCRIPT_DIR/slipstream-client"
+# Resolve paths — config/dns/results/exe are in the project root (one level up)
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+[[ -z "$CONFIG_PATH" ]] && CONFIG_PATH="$PROJECT_ROOT/config.ini"
+[[ -z "$DNS_LIST_PATH" ]] && DNS_LIST_PATH="$PROJECT_ROOT/dns-list.txt"
+RESULTS_DIR="$PROJECT_ROOT/results"
+EXE_PATH="$PROJECT_ROOT/slipstream-client"
 
 # Banner + logger
 print_banner

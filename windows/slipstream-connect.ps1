@@ -46,11 +46,12 @@ EXAMPLES:
     exit 0
 }
 
-# Resolve paths
-if (-not $ConfigPath) { $ConfigPath = Join-Path $scriptRoot "config.ini" }
-if (-not $DnsListPath) { $DnsListPath = Join-Path $scriptRoot "dns-list.txt" }
-$resultsDir = Join-Path $scriptRoot "results"
-$exePath = Join-Path $scriptRoot "slipstream-client.exe"
+# Resolve paths — config/dns/results/exe are in the project root (one level up)
+$projectRoot = Split-Path $scriptRoot -Parent
+if (-not $ConfigPath) { $ConfigPath = Join-Path $projectRoot "config.ini" }
+if (-not $DnsListPath) { $DnsListPath = Join-Path $projectRoot "dns-list.txt" }
+$resultsDir = Join-Path $projectRoot "results"
+$exePath = Join-Path $projectRoot "slipstream-client.exe"
 
 # Initialize logger and show banner
 Write-Banner
