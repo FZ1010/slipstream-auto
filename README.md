@@ -4,6 +4,34 @@ Automatically finds a working DNS resolver from a large list, connects to the in
 
 Built for situations where internet access requires tunneling through specific DNS resolvers, and you have a list of thousands of candidates but no time to test them one by one.
 
+## Project Structure
+
+```
+slipstream-auto/
+├── windows/                # Windows scripts
+│   ├── start.bat           # Double-click to run
+│   ├── slipstream-connect.ps1
+│   └── lib/
+│       ├── Config.ps1
+│       ├── Connect.ps1
+│       ├── Logger.ps1
+│       └── Test-Dns.ps1
+├── unix/                   # Linux / macOS scripts
+│   ├── start.sh            # Run this
+│   ├── slipstream-connect.sh
+│   └── lib/
+│       ├── config.sh
+│       ├── connect.sh
+│       ├── logger.sh
+│       └── test-dns.sh
+├── config.ini              # Shared config (both platforms)
+├── dns-list.txt            # Your DNS list
+├── results/                # Generated at runtime
+└── README.md
+```
+
+Place `slipstream-client.exe` (Windows) or `slipstream-client` (Linux) in the **root folder**.
+
 ## How It Works
 
 1. Loads your DNS list (previously working DNS are tried first)
@@ -33,7 +61,7 @@ Both platforms need a `dns-list.txt` file with one DNS IP per line.
 1. Download/clone this repo
 2. Place `slipstream-client.exe` in the root folder
 3. Place your `dns-list.txt` in the root folder (or use the included one)
-4. **Double-click `start.bat`**
+4. **Double-click `windows\start.bat`**
 5. Wait for it to find a working DNS and connect
 6. Set your browser/system proxy to **SOCKS5 `127.0.0.1:<port>`** (the port is shown in the output)
 
@@ -42,14 +70,14 @@ Both platforms need a `dns-list.txt` file with one DNS IP per line.
 ```bash
 git clone https://github.com/FZ1010/slipstream-auto.git
 cd slipstream-auto
-# Place your slipstream-client binary and dns-list.txt here
-chmod +x start.sh
-./start.sh
+# Place your slipstream-client binary and dns-list.txt in the root
+chmod +x unix/start.sh
+./unix/start.sh
 ```
 
 ## Configuration
 
-Edit `config.ini` to customize behavior (shared by both Windows and Linux versions):
+Edit `config.ini` in the root folder (shared by both platforms):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -70,7 +98,7 @@ Edit `config.ini` to customize behavior (shared by both Windows and Linux versio
 ### Windows (PowerShell)
 
 ```
-.\slipstream-connect.ps1 [options]
+.\windows\slipstream-connect.ps1 [options]
 
   -ConfigPath <path>    Path to config.ini
   -DnsListPath <path>   Path to dns-list.txt
@@ -78,16 +106,16 @@ Edit `config.ini` to customize behavior (shared by both Windows and Linux versio
   -Help                 Show help
 ```
 
-Or just use `start.bat` which passes arguments through:
+Or just double-click `windows\start.bat` (passes arguments through):
 
 ```
-start.bat -Workers 10
+windows\start.bat -Workers 10
 ```
 
 ### Linux / macOS (Bash)
 
 ```
-./slipstream-connect.sh [options]
+./unix/slipstream-connect.sh [options]
 
   -c, --config <path>     Path to config.ini
   -d, --dns-list <path>   Path to dns-list.txt
@@ -95,15 +123,15 @@ start.bat -Workers 10
   -h, --help              Show help
 ```
 
-Or just use `start.sh`:
+Or just use `unix/start.sh`:
 
 ```bash
-./start.sh -w 10
+./unix/start.sh -w 10
 ```
 
 ## Output Files
 
-After running, check the `results/` folder:
+After running, check the `results/` folder in the project root:
 
 - **`working-dns.txt`** — DNS entries that were confirmed working (with timestamps)
 - **`failed-dns.txt`** — DNS entries that failed (skipped on future runs)
@@ -114,11 +142,11 @@ To re-test previously failed DNS entries, delete `results/failed-dns.txt`.
 ## Troubleshooting
 
 - **"No working DNS found"** — Your DNS list may be outdated. Get a fresh list, or delete `results/failed-dns.txt` to retry failed ones.
-- **"slipstream-client not found"** — Place the binary in the same folder as the scripts.
+- **"slipstream-client not found"** — Place the binary in the **root folder** (not inside windows/ or unix/).
 - **"curl not found"** — Windows: need Windows 10+. Linux: `sudo apt install curl` (or equivalent).
 - **Connection drops frequently** — Increase `HealthCheckInterval` in config.ini or try more workers to find better DNS entries.
 - **Too slow** — Increase `Workers` in config.ini (e.g., 10 or 20). More workers = more parallel tests.
-- **Script stuck / can't Ctrl+C** — The script registers cleanup handlers. If it's truly stuck, close the terminal window. Any orphaned `slipstream-client` processes can be killed manually (`taskkill /F /IM slipstream-client.exe` on Windows, `pkill slipstream-client` on Linux).
+- **Script stuck / can't Ctrl+C** — The script registers cleanup handlers. If it's truly stuck, close the terminal window. Kill orphaned processes: `taskkill /F /IM slipstream-client.exe` (Windows) or `pkill slipstream-client` (Linux).
 
 ## Contributing
 
