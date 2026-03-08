@@ -292,7 +292,29 @@ function Invoke-MenuTestDns {
     Write-Log -Message "=== Test DNS ===" -Level Info
     Write-Log -Message "Scanning all tiers. Press Ctrl+C to stop and keep results so far." -Level Info
 
-    $result = Invoke-FullScan -Config $Config -DnsList $DnsList -PriorityCount $PriorityCount -ExePath $ExePath -ResultsDirectory $ResultsDirectory
+    $result = $null
+
+    # Test priority DNS first (tier 0 + tier 1)
+    if ($PriorityCount -gt 0) {
+        Write-Host ""
+        Write-Log -Message "Testing $PriorityCount priority DNS entries (tier 0 + tier 1)..." -Level Info
+        $priorityList = @($DnsList[0..($PriorityCount - 1)])
+        $result = Start-DnsTesting -DnsList $priorityList -Config $Config -ExePath $ExePath -ResultsDirectory $ResultsDirectory
+    }
+
+    # Test remaining DNS (tier 2) — NO StopAfterFound, scan everything
+    $remainingCount = $DnsList.Count - $PriorityCount
+    if ($remainingCount -gt 0) {
+        Write-Host ""
+        Write-Log -Message "Testing remaining $remainingCount DNS entries (tier 2)..." -Level Info
+        Write-Log -Message "Press Ctrl+C anytime to stop scanning." -Level Info
+        Write-Host ""
+        $remainingList = @($DnsList[$PriorityCount..($DnsList.Count - 1)])
+        $newResult = Start-DnsTesting -DnsList $remainingList -Config $Config -ExePath $ExePath -ResultsDirectory $ResultsDirectory
+        if ($newResult -and ($null -eq $result -or $newResult.Score -lt $result.Score)) {
+            $result = $newResult
+        }
+    }
 
     Write-Host ""
     if ($result) {
