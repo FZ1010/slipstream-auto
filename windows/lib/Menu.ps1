@@ -3,6 +3,42 @@
 
 $global:MenuInterrupted = $false
 
+function Read-MenuChoice {
+    param([string]$Prompt)
+
+    Write-Host $Prompt -NoNewline
+    $line = ""
+    $originalCtrlC = [Console]::TreatControlCAsInput
+    [Console]::TreatControlCAsInput = $true
+    try {
+        while ($true) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq 'C' -and ($key.Modifiers -band [ConsoleModifiers]::Control)) {
+                $global:MenuInterrupted = $true
+                Write-Host ""
+                return $null
+            }
+            if ($key.Key -eq 'Enter') {
+                Write-Host ""
+                return $line
+            }
+            if ($key.Key -eq 'Backspace') {
+                if ($line.Length -gt 0) {
+                    $line = $line.Substring(0, $line.Length - 1)
+                    Write-Host "`b `b" -NoNewline
+                }
+                continue
+            }
+            if ($key.KeyChar -ne [char]0) {
+                $line += $key.KeyChar
+                Write-Host $key.KeyChar -NoNewline
+            }
+        }
+    } finally {
+        [Console]::TreatControlCAsInput = $originalCtrlC
+    }
+}
+
 function Show-MainMenu {
     Write-Host ""
     Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Cyan
@@ -45,7 +81,7 @@ function Start-MenuLoop {
         [string]$ResultsDirectory
     )
 
-    # Set up Ctrl+C handler: cancel termination, set flag instead
+    # Set up Ctrl+C handler for operations (scanning, connecting)
     $cancelHandler = {
         param($sender, $e)
         $e.Cancel = $true
@@ -57,21 +93,31 @@ function Start-MenuLoop {
         while ($true) {
             $global:MenuInterrupted = $false
             Show-MainMenu
-            $choice = Read-Host "  Choose [1-7]"
-            switch ($choice) {
-                "1" { Invoke-MenuConnect -Config $Config -DnsList $DnsList -PriorityCount $PriorityCount -ExePath $ExePath -ResultsDirectory $ResultsDirectory }
-                "2" { Invoke-MenuTestDns -Config $Config -DnsList $DnsList -PriorityCount $PriorityCount -ExePath $ExePath -ResultsDirectory $ResultsDirectory }
-                "3" { Invoke-MenuConfigure -Config $Config -ConfigPath $ConfigPath }
-                "4" { Invoke-MenuViewResults -ResultsDirectory $ResultsDirectory }
-                "5" { Invoke-MenuClearResults -ResultsDirectory $ResultsDirectory }
-                "6" { Invoke-MenuHelp }
-                "7" { Write-Host ""; Write-Log -Message "Goodbye." -Level Info; exit 0 }
-                default { Write-Host ""; Write-Log -Message "Invalid choice. Please enter 1-7." -Level Warning }
-            }
-            if ($global:MenuInterrupted) {
+            $choice = Read-MenuChoice "  Choose [1-7]: "
+            if ($null -eq $choice -or $global:MenuInterrupted) {
                 Write-Host ""
                 Write-Log -Message "Returning to menu..." -Level Warning
                 Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                continue
+            }
+            try {
+                switch ($choice) {
+                    "1" { Invoke-MenuConnect -Config $Config -DnsList $DnsList -PriorityCount $PriorityCount -ExePath $ExePath -ResultsDirectory $ResultsDirectory }
+                    "2" { Invoke-MenuTestDns -Config $Config -DnsList $DnsList -PriorityCount $PriorityCount -ExePath $ExePath -ResultsDirectory $ResultsDirectory }
+                    "3" { Invoke-MenuConfigure -Config $Config -ConfigPath $ConfigPath }
+                    "4" { Invoke-MenuViewResults -ResultsDirectory $ResultsDirectory }
+                    "5" { Invoke-MenuClearResults -ResultsDirectory $ResultsDirectory }
+                    "6" { Invoke-MenuHelp }
+                    "7" { Write-Host ""; Write-Log -Message "Goodbye." -Level Info; exit 0 }
+                    default { Write-Host ""; Write-Log -Message "Invalid choice. Please enter 1-7." -Level Warning }
+                }
+            } catch {
+                # Ctrl+C during operations throws PipelineStoppedException
+                if ($global:MenuInterrupted) {
+                    Write-Host ""
+                    Write-Log -Message "Returning to menu..." -Level Warning
+                    Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                }
             }
         }
     } finally {
@@ -119,7 +165,7 @@ function Invoke-MenuConnect {
     if (-not $result) {
         Write-Log -Message "No working DNS found. Try 'Test DNS' first." -Level Error
         Write-Host ""
-        Read-Host "  Press Enter to return to menu"
+        Read-MenuChoice "  Press Enter to return to menu..." | Out-Null
         return
     }
 
@@ -194,7 +240,7 @@ function Invoke-MenuConnect {
 
     if (-not $global:MenuInterrupted) {
         Write-Host ""
-        Read-Host "  Press Enter to return to menu"
+        Read-MenuChoice "  Press Enter to return to menu..." | Out-Null
     }
 }
 
@@ -258,7 +304,7 @@ function Invoke-MenuTestDns {
     Show-ResultsSummary -ResultsDirectory $ResultsDirectory
 
     Write-Host ""
-    Read-Host "  Press Enter to return to menu"
+    Read-MenuChoice "  Press Enter to return to menu..." | Out-Null
 }
 
 function Invoke-MenuConfigure {
@@ -280,7 +326,8 @@ function Invoke-MenuConfigure {
         Write-Host "  " -NoNewline; Write-Host "[7]" -ForegroundColor Green -NoNewline; Write-Host " Skip Previously Failed: $($Config.SkipPreviouslyFailed)"
         Write-Host "  " -NoNewline; Write-Host "[8]" -ForegroundColor Green -NoNewline; Write-Host " Back to main menu"
         Write-Host ""
-        $choice = Read-Host "  Choose [1-8]"
+        $choice = Read-MenuChoice "  Choose [1-8]: "
+        if ($null -eq $choice -or $global:MenuInterrupted) { return }
 
         $key = switch ($choice) {
             "1" { "Domain" }
@@ -295,7 +342,8 @@ function Invoke-MenuConfigure {
         }
 
         Write-Host ""
-        $newValue = Read-Host "  New value for $key [$($Config[$key])]"
+        $newValue = Read-MenuChoice "  New value for $key [$($Config[$key])]: "
+        if ($null -eq $newValue -or $global:MenuInterrupted) { return }
         if ([string]::IsNullOrWhiteSpace($newValue)) {
             Write-Log -Message "No change." -Level Info
             continue
@@ -395,7 +443,7 @@ function Invoke-MenuViewResults {
     }
 
     Write-Host ""
-    Read-Host "  Press Enter to return to menu"
+    Read-MenuChoice "  Press Enter to return to menu..." | Out-Null
 }
 
 function Invoke-MenuClearResults {
@@ -403,7 +451,8 @@ function Invoke-MenuClearResults {
 
     Write-Host ""
     Write-Log -Message "This will delete dns-working.txt and dns-failed.txt." -Level Warning
-    $confirm = Read-Host "  Are you sure? (y/n)"
+    $confirm = Read-MenuChoice "  Are you sure? (y/n): "
+    if ($null -eq $confirm -or $global:MenuInterrupted) { return }
     if ($confirm -eq 'y') {
         Remove-Item (Join-Path $ResultsDirectory "dns-working.txt") -Force -ErrorAction SilentlyContinue
         Remove-Item (Join-Path $ResultsDirectory "dns-failed.txt") -Force -ErrorAction SilentlyContinue
@@ -413,7 +462,7 @@ function Invoke-MenuClearResults {
     }
 
     Write-Host ""
-    Read-Host "  Press Enter to return to menu"
+    Read-MenuChoice "  Press Enter to return to menu..." | Out-Null
 }
 
 function Invoke-MenuHelp {
@@ -443,5 +492,5 @@ function Invoke-MenuHelp {
 
 '@
     Write-Host $helpText
-    Read-Host "  Press Enter to return to menu"
+    Read-MenuChoice "  Press Enter to return to menu..." | Out-Null
 }

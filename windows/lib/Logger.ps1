@@ -47,6 +47,35 @@ function Write-Log {
     }
 }
 
+function Show-ConfigSummary {
+    param(
+        [hashtable]$Config,
+        [int]$Tier0Count = 0,
+        [int]$Tier1Count = 0,
+        [int]$Tier2Count = 0,
+        [int]$SkippedCount = 0,
+        [int]$TotalCount = 0
+    )
+
+    Write-Host ""
+    Write-Host "  -- Configuration ------------------------------------------" -ForegroundColor Cyan
+    Write-Host ("     {0,-18} " -f "Domain:") -NoNewline; Write-Host $Config.Domain -ForegroundColor Green
+    Write-Host ("     {0,-18} " -f "Workers:") -NoNewline; Write-Host $Config.Workers -ForegroundColor Green
+    Write-Host ("     {0,-18} " -f "Timeout:") -NoNewline; Write-Host "$($Config.Timeout)s" -ForegroundColor Green
+    Write-Host ("     {0,-18} " -f "Health Check:") -NoNewline; Write-Host "$($Config.HealthCheckInterval)s" -ForegroundColor Green
+    $reconnectDisplay = if ($Config.MaxReconnectAttempts -eq 0) { "unlimited" } else { "$($Config.MaxReconnectAttempts)" }
+    Write-Host ("     {0,-18} " -f "Max Reconnects:") -NoNewline; Write-Host $reconnectDisplay -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  -- DNS Queue -----------------------------------------------" -ForegroundColor Cyan
+    Write-Host ("     {0,-18} " -f "Custom:") -NoNewline; Write-Host $Tier0Count -ForegroundColor Green
+    Write-Host ("     {0,-18} " -f "Working:") -NoNewline; Write-Host $Tier1Count -ForegroundColor Green
+    Write-Host ("     {0,-18} " -f "DNS List:") -NoNewline; Write-Host $Tier2Count -ForegroundColor Green
+    Write-Host ("     {0,-18} " -f "Skipped:") -NoNewline; Write-Host $SkippedCount -ForegroundColor Yellow
+    Write-Host "     ------------------------------" -ForegroundColor DarkGray
+    Write-Host ("     {0,-18} " -f "Total:") -NoNewline; Write-Host $TotalCount -ForegroundColor Cyan
+    Write-Host ""
+}
+
 function Write-Banner {
     $banner = @"
 

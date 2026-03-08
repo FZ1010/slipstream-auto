@@ -88,15 +88,14 @@ if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
 $config = Read-Config -Path $ConfigPath
 if ($Workers -gt 0) { $config.Workers = $Workers }
 
-Write-Log -Message "Domain: $($config.Domain)" -Level Info
-Write-Log -Message "Workers: $($config.Workers) | Timeout: $($config.Timeout)s | Health check: $($config.HealthCheckInterval)s" -Level Info
-Write-Host ""
-
 # ── Load DNS list ──
 
 $dnsData = Read-DnsList -Path $DnsListPath -CustomPath $UserDnsPath -Config $config -ResultsDirectory $resultsDir
 $dnsList = $dnsData.DnsList
 $priorityCount = $dnsData.PriorityCount
+
+Show-ConfigSummary -Config $config -Tier0Count $dnsData.Tier0Count -Tier1Count $dnsData.Tier1Count -Tier2Count $dnsData.Tier2Count -SkippedCount $dnsData.SkippedCount -TotalCount $dnsList.Count
+
 if ($dnsList.Count -eq 0) {
     Write-Log -Message "No DNS entries to test! Check your dns-list.txt file." -Level Error
     Read-Host "Press Enter to exit"

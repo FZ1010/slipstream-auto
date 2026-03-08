@@ -74,7 +74,7 @@ function Read-DnsList {
             ForEach-Object { ($_ -split '\|')[0].Trim() } |
             Where-Object { $_ -ne '' } |
             ForEach-Object { $knownBad[$_] = $true }
-        Write-Log -Message "Loaded $($knownBad.Count) previously failed DNS entries to skip" -Level Info
+        Write-Log -Message "Loaded $($knownBad.Count) previously failed DNS entries to skip" -Level Debug
     }
 
     # Track seen DNS to avoid duplicates across tiers
@@ -87,7 +87,7 @@ function Read-DnsList {
             ForEach-Object { $_.Trim() } |
             Where-Object { $_ -ne '' -and $_ -match '^\d' -and -not $knownBad.ContainsKey($_) -and -not $seen.ContainsKey($_) } |
             ForEach-Object { $seen[$_] = $true; $_ })
-        Write-Log -Message "Tier 0 (dns-custom.txt): $($tier0.Count) entries" -Level Info
+        Write-Log -Message "Tier 0 (dns-custom.txt): $($tier0.Count) entries" -Level Debug
     }
 
     # ── Tier 1: Previously working DNS ──
@@ -99,7 +99,7 @@ function Read-DnsList {
             Where-Object { $_ -ne '' -and -not $knownBad.ContainsKey($_) -and -not $seen.ContainsKey($_) } |
             ForEach-Object { $seen[$_] = $true; $_ })
     }
-    Write-Log -Message "Tier 1 (previously working): $($tier1.Count) entries" -Level Info
+    Write-Log -Message "Tier 1 (previously working): $($tier1.Count) entries" -Level Debug
 
     # ── Tier 2: DNS list ──
     $tier2 = @()
@@ -111,12 +111,19 @@ function Read-DnsList {
     } else {
         Write-Log -Message "DNS list not found at $Path" -Level Warning
     }
-    Write-Log -Message "Tier 2 (dns-list.txt): $($tier2.Count) entries" -Level Info
+    Write-Log -Message "Tier 2 (dns-list.txt): $($tier2.Count) entries" -Level Debug
 
     # ── Combine: tier0 -> tier1 -> tier2 ──
     $final = @($tier0) + @($tier1) + @($tier2)
     $priorityCount = $tier0.Count + $tier1.Count
-    Write-Log -Message "DNS queue: $($final.Count) total (custom: $($tier0.Count), working: $($tier1.Count), list: $($tier2.Count))" -Level Info
+    Write-Log -Message "DNS queue: $($final.Count) total (custom: $($tier0.Count), working: $($tier1.Count), list: $($tier2.Count))" -Level Debug
 
-    return @{ DnsList = $final; PriorityCount = $priorityCount }
+    return @{
+        DnsList = $final
+        PriorityCount = $priorityCount
+        Tier0Count = $tier0.Count
+        Tier1Count = $tier1.Count
+        Tier2Count = $tier2.Count
+        SkippedCount = $knownBad.Count
+    }
 }

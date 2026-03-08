@@ -37,6 +37,27 @@ log() {
     fi
 }
 
+show_config_summary() {
+    echo ""
+    echo -e "  \033[36m── Configuration ──────────────────────────\033[0m"
+    printf "     %-18s \033[32m%s\033[0m\n" "Domain:" "${CONFIG[Domain]}"
+    printf "     %-18s \033[32m%s\033[0m\n" "Workers:" "${CONFIG[Workers]}"
+    printf "     %-18s \033[32m%s\033[0m\n" "Timeout:" "${CONFIG[Timeout]}s"
+    printf "     %-18s \033[32m%s\033[0m\n" "Health Check:" "${CONFIG[HealthCheckInterval]}s"
+    local reconnect_display="${CONFIG[MaxReconnectAttempts]}"
+    [[ "$reconnect_display" == "0" ]] && reconnect_display="unlimited"
+    printf "     %-18s \033[32m%s\033[0m\n" "Max Reconnects:" "$reconnect_display"
+    echo ""
+    echo -e "  \033[36m── DNS Queue ──────────────────────────────\033[0m"
+    printf "     %-18s \033[32m%s\033[0m\n" "Custom:" "${TIER0_COUNT:-0}"
+    printf "     %-18s \033[32m%s\033[0m\n" "Working:" "${TIER1_COUNT:-0}"
+    printf "     %-18s \033[32m%s\033[0m\n" "DNS List:" "${TIER2_COUNT:-0}"
+    printf "     %-18s \033[33m%s\033[0m\n" "Skipped:" "${SKIPPED_COUNT:-0}"
+    echo -e "     \033[90m──────────────────────────────\033[0m"
+    printf "     %-18s \033[36m%s\033[0m\n" "Total:" "${#DNS_LIST[@]}"
+    echo ""
+}
+
 print_banner() {
     echo -e "\033[36m"
     cat << 'BANNER'

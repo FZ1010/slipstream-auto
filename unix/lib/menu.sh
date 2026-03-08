@@ -42,7 +42,9 @@ run_menu_loop() {
         MENU_INTERRUPTED=false
         trap '_menu_interrupt' INT
         show_main_menu
-        read -rp "  Choose [1-7]: " choice
+        local choice=""
+        read -rp "  Choose [1-7]: " choice || true
+        if [[ "$MENU_INTERRUPTED" == "true" ]]; then continue; fi
         case "$choice" in
             1) menu_connect ;;
             2) menu_test_dns ;;
@@ -89,7 +91,7 @@ menu_connect() {
     if [[ -z "$FOUND_DNS" ]]; then
         log Error "No working DNS found. Try 'Test DNS' first."
         echo ""
-        read -rp "  Press Enter to return to menu..."
+        read -rp "  Press Enter to return to menu..." || true
         return
     fi
 
@@ -233,7 +235,7 @@ menu_test_dns() {
     _show_results_summary
 
     echo ""
-    read -rp "  Press Enter to return to menu..."
+    read -rp "  Press Enter to return to menu..." || true
 }
 
 menu_configure() {
@@ -250,7 +252,9 @@ menu_configure() {
         echo -e "  \033[32m[7]\033[0m Skip Previously Failed: ${CONFIG[SkipPreviouslyFailed]}"
         echo -e "  \033[32m[8]\033[0m Back to main menu"
         echo ""
-        read -rp "  Choose [1-8]: " choice
+        local choice=""
+        read -rp "  Choose [1-8]: " choice || true
+        if [[ "$MENU_INTERRUPTED" == "true" ]]; then return; fi
 
         local key=""
         case "$choice" in
@@ -266,7 +270,9 @@ menu_configure() {
         esac
 
         echo ""
-        read -rp "  New value for $key [${CONFIG[$key]}]: " new_value
+        local new_value=""
+        read -rp "  New value for $key [${CONFIG[$key]}]: " new_value || true
+        if [[ "$MENU_INTERRUPTED" == "true" ]]; then return; fi
         if [[ -z "$new_value" ]]; then
             log Info "No change."
             continue
@@ -347,13 +353,15 @@ menu_view_results() {
     fi
 
     echo ""
-    read -rp "  Press Enter to return to menu..."
+    read -rp "  Press Enter to return to menu..." || true
 }
 
 menu_clear_results() {
     echo ""
     log Warning "This will delete dns-working.txt and dns-failed.txt."
-    read -rp "  Are you sure? (y/n): " confirm
+    local confirm=""
+    read -rp "  Are you sure? (y/n): " confirm || true
+    if [[ "$MENU_INTERRUPTED" == "true" ]]; then return; fi
     if [[ "${confirm,,}" == "y" ]]; then
         rm -f "$RESULTS_DIR/dns-working.txt" "$RESULTS_DIR/dns-failed.txt"
         log Success "Results cleared."
@@ -361,7 +369,7 @@ menu_clear_results() {
         log Info "Cancelled."
     fi
     echo ""
-    read -rp "  Press Enter to return to menu..."
+    read -rp "  Press Enter to return to menu..." || true
 }
 
 menu_help() {
@@ -391,5 +399,5 @@ menu_help() {
     ./start.sh -u my-dns.txt    Bypass menu, use custom DNS list
 
 HELP
-    read -rp "  Press Enter to return to menu..."
+    read -rp "  Press Enter to return to menu..." || true
 }

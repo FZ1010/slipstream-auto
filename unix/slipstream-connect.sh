@@ -105,15 +105,13 @@ fi
 read_config "$CONFIG_PATH"
 [[ $WORKERS_OVERRIDE -gt 0 ]] && CONFIG[Workers]="$WORKERS_OVERRIDE"
 
-log Info "Domain: ${CONFIG[Domain]}"
-log Info "Workers: ${CONFIG[Workers]} | Timeout: ${CONFIG[Timeout]}s | Health check: ${CONFIG[HealthCheckInterval]}s"
-echo ""
-
 # ── Load DNS list ──
 
 DNS_LIST=()
 PRIORITY_COUNT=0
 read_dns_list "$CUSTOM_DNS_PATH" "$DNS_LIST_PATH" "$RESULTS_DIR"
+
+show_config_summary
 
 if [[ ${#DNS_LIST[@]} -eq 0 ]]; then
     log Error "No DNS entries to test! Check your dns-list.txt file."
