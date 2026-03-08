@@ -1,6 +1,8 @@
 ﻿# lib/Menu.ps1
 # Interactive launcher menu for SlipStream Auto Connector
 
+$global:MenuInterrupted = $false
+
 function Show-MainMenu {
     Write-Host ""
     Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Cyan
@@ -43,19 +45,37 @@ function Start-MenuLoop {
         [string]$ResultsDirectory
     )
 
-    while ($true) {
-        Show-MainMenu
-        $choice = Read-Host "  Choose [1-7]"
-        switch ($choice) {
-            "1" { Invoke-MenuConnect -Config $Config -DnsList $DnsList -PriorityCount $PriorityCount -ExePath $ExePath -ResultsDirectory $ResultsDirectory }
-            "2" { Invoke-MenuTestDns -Config $Config -DnsList $DnsList -PriorityCount $PriorityCount -ExePath $ExePath -ResultsDirectory $ResultsDirectory }
-            "3" { Invoke-MenuConfigure -Config $Config -ConfigPath $ConfigPath }
-            "4" { Invoke-MenuViewResults -ResultsDirectory $ResultsDirectory }
-            "5" { Invoke-MenuClearResults -ResultsDirectory $ResultsDirectory }
-            "6" { Invoke-MenuHelp }
-            "7" { Write-Host ""; Write-Log -Message "Goodbye." -Level Info; exit 0 }
-            default { Write-Host ""; Write-Log -Message "Invalid choice. Please enter 1-7." -Level Warning }
+    # Set up Ctrl+C handler: cancel termination, set flag instead
+    $cancelHandler = {
+        param($sender, $e)
+        $e.Cancel = $true
+        $global:MenuInterrupted = $true
+    }
+    [Console]::add_CancelKeyPress($cancelHandler)
+
+    try {
+        while ($true) {
+            $global:MenuInterrupted = $false
+            Show-MainMenu
+            $choice = Read-Host "  Choose [1-7]"
+            switch ($choice) {
+                "1" { Invoke-MenuConnect -Config $Config -DnsList $DnsList -PriorityCount $PriorityCount -ExePath $ExePath -ResultsDirectory $ResultsDirectory }
+                "2" { Invoke-MenuTestDns -Config $Config -DnsList $DnsList -PriorityCount $PriorityCount -ExePath $ExePath -ResultsDirectory $ResultsDirectory }
+                "3" { Invoke-MenuConfigure -Config $Config -ConfigPath $ConfigPath }
+                "4" { Invoke-MenuViewResults -ResultsDirectory $ResultsDirectory }
+                "5" { Invoke-MenuClearResults -ResultsDirectory $ResultsDirectory }
+                "6" { Invoke-MenuHelp }
+                "7" { Write-Host ""; Write-Log -Message "Goodbye." -Level Info; exit 0 }
+                default { Write-Host ""; Write-Log -Message "Invalid choice. Please enter 1-7." -Level Warning }
+            }
+            if ($global:MenuInterrupted) {
+                Write-Host ""
+                Write-Log -Message "Returning to menu..." -Level Warning
+                Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            }
         }
+    } finally {
+        [Console]::remove_CancelKeyPress($cancelHandler)
     }
 }
 
@@ -94,6 +114,8 @@ function Invoke-MenuConnect {
         $result = Invoke-FullScan -Config $Config -DnsList $DnsList -PriorityCount $PriorityCount -ExePath $ExePath -ResultsDirectory $ResultsDirectory
     }
 
+    if ($global:MenuInterrupted) { return }
+
     if (-not $result) {
         Write-Log -Message "No working DNS found. Try 'Test DNS' first." -Level Error
         Write-Host ""
@@ -106,11 +128,14 @@ function Invoke-MenuConnect {
     Write-Log -Message "Best DNS: $($result.Dns) (score: $($result.Score)s)" -Level Success
     Write-Host ""
     Write-Log -Message "=== Establishing persistent connection ===" -Level Info
+    Write-Log -Message "Press Ctrl+C to disconnect and return to menu." -Level Info
 
     $reconnectCount = 0
     $workingDns = $result.Dns
 
     while ($true) {
+        if ($global:MenuInterrupted) { break }
+
         if ($Config.MaxReconnectAttempts -gt 0 -and $reconnectCount -ge $Config.MaxReconnectAttempts) {
             Write-Log -Message "Max reconnect attempts ($($Config.MaxReconnectAttempts)) reached." -Level Error
             break
@@ -151,6 +176,8 @@ function Invoke-MenuConnect {
             Write-Log -Message "Failed to connect via $workingDns" -Level Warning
         }
 
+        if ($global:MenuInterrupted) { break }
+
         $reconnectCount++
         Write-Host ""
         Write-Log -Message "Connection lost. Re-scanning..." -Level Warning
@@ -165,8 +192,10 @@ function Invoke-MenuConnect {
         $workingDns = $result.Dns
     }
 
-    Write-Host ""
-    Read-Host "  Press Enter to return to menu"
+    if (-not $global:MenuInterrupted) {
+        Write-Host ""
+        Read-Host "  Press Enter to return to menu"
+    }
 }
 
 function Invoke-FullScan {
@@ -184,19 +213,18 @@ function Invoke-FullScan {
         Write-Host ""
         Write-Log -Message "Testing $PriorityCount priority DNS entries first..." -Level Info
         $priorityList = @($DnsList[0..($PriorityCount - 1)])
-        $result = Start-DnsTesting -DnsList $priorityList -Config $Config -ExePath $ExePath -ResultsDirectory $ResultsDirectory
+        $result = Start-DnsTesting -DnsList $priorityList -Config $Config -ExePath $ExePath -ResultsDirectory $ResultsDirectory -StopAfterFound
     }
+
+    # Skip remaining if we already found one (Connect mode stops early)
+    if ($result) { return $result }
 
     $remainingCount = $DnsList.Count - $PriorityCount
     if ($remainingCount -gt 0) {
         Write-Host ""
-        if ($result) {
-            Write-Log -Message "Scanning remaining $remainingCount DNS entries for a better match..." -Level Info
-        } else {
-            Write-Log -Message "Scanning remaining $remainingCount DNS entries..." -Level Info
-        }
+        Write-Log -Message "Scanning $remainingCount DNS entries..." -Level Info
         $remainingList = @($DnsList[$PriorityCount..($DnsList.Count - 1)])
-        $newResult = Start-DnsTesting -DnsList $remainingList -Config $Config -ExePath $ExePath -ResultsDirectory $ResultsDirectory
+        $newResult = Start-DnsTesting -DnsList $remainingList -Config $Config -ExePath $ExePath -ResultsDirectory $ResultsDirectory -StopAfterFound
         if ($newResult -and ($null -eq $result -or $newResult.Score -lt $result.Score)) {
             $result = $newResult
         }

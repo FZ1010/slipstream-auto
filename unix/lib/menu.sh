@@ -2,6 +2,23 @@
 # lib/menu.sh
 # Interactive launcher menu for SlipStream Auto Connector
 
+MENU_INTERRUPTED=false
+
+_menu_interrupt() {
+    MENU_INTERRUPTED=true
+    # Kill background worker processes
+    if [[ ${#WORKER_PIDS[@]} -gt 0 ]]; then
+        for pid in "${WORKER_PIDS[@]}"; do
+            kill "$pid" 2>/dev/null || true
+        done
+        WORKER_PIDS=()
+    fi
+    # Kill active connection
+    stop_active_connection
+    echo ""
+    log Warning "Interrupted. Returning to menu..."
+}
+
 show_main_menu() {
     echo ""
     echo -e "\033[36m╔══════════════════════════════════════╗"
@@ -22,6 +39,8 @@ show_main_menu() {
 
 run_menu_loop() {
     while true; do
+        MENU_INTERRUPTED=false
+        trap '_menu_interrupt' INT
         show_main_menu
         read -rp "  Choose [1-7]: " choice
         case "$choice" in
@@ -65,6 +84,8 @@ menu_connect() {
         _menu_scan_all
     fi
 
+    if [[ "$MENU_INTERRUPTED" == "true" ]]; then return; fi
+
     if [[ -z "$FOUND_DNS" ]]; then
         log Error "No working DNS found. Try 'Test DNS' first."
         echo ""
@@ -75,10 +96,13 @@ menu_connect() {
     # Phase 2: Connect and maintain
     echo ""
     log Info "=== Establishing persistent connection ==="
+    log Info "Press Ctrl+C to disconnect and return to menu."
 
     local reconnect_count=0
 
     while true; do
+        if [[ "$MENU_INTERRUPTED" == "true" ]]; then break; fi
+
         if [[ ${CONFIG[MaxReconnectAttempts]} -gt 0 && $reconnect_count -ge ${CONFIG[MaxReconnectAttempts]} ]]; then
             log Error "Max reconnect attempts (${CONFIG[MaxReconnectAttempts]}) reached."
             break
@@ -117,6 +141,8 @@ menu_connect() {
             log Warning "Failed to connect via $FOUND_DNS"
         fi
 
+        if [[ "$MENU_INTERRUPTED" == "true" ]]; then break; fi
+
         reconnect_count=$((reconnect_count + 1))
         echo ""
         log Warning "Connection lost. Re-scanning..."
@@ -131,15 +157,13 @@ menu_connect() {
             break
         fi
     done
-
-    echo ""
-    read -rp "  Press Enter to return to menu..."
 }
 
 _menu_scan_all() {
     FOUND_DNS=""
     FOUND_PORT=""
     BEST_SCORE=999
+    STOP_AFTER_FOUND=true
 
     # Phase 1a: Priority DNS
     if [[ $PRIORITY_COUNT -gt 0 ]]; then
@@ -149,15 +173,18 @@ _menu_scan_all() {
         start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
     fi
 
+    # Skip remaining if we already found one (Connect mode stops early)
+    if [[ -n "$FOUND_DNS" ]]; then
+        echo ""
+        log Success "Best DNS: $FOUND_DNS (score: ${BEST_SCORE}s)"
+        return
+    fi
+
     # Phase 1b: Remaining DNS
     local remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
     if [[ $remaining_count -gt 0 ]]; then
         echo ""
-        if [[ -n "$FOUND_DNS" ]]; then
-            log Info "Scanning remaining $remaining_count DNS entries for a better match..."
-        else
-            log Info "Scanning remaining $remaining_count DNS entries..."
-        fi
+        log Info "Scanning $remaining_count DNS entries..."
         DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
         start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
     fi
@@ -177,6 +204,7 @@ menu_test_dns() {
     FOUND_DNS=""
     FOUND_PORT=""
     BEST_SCORE=999
+    STOP_AFTER_FOUND=false
 
     if [[ $PRIORITY_COUNT -gt 0 ]]; then
         log Info "Testing $PRIORITY_COUNT priority DNS entries (tier 0 + tier 1)..."

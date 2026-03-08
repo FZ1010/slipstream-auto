@@ -207,7 +207,8 @@ function Start-DnsTesting {
         [Parameter(Mandatory)]
         [string]$ExePath,
         [Parameter(Mandatory)]
-        [string]$ResultsDirectory
+        [string]$ResultsDirectory,
+        [switch]$StopAfterFound
     )
 
     $workingPath = Join-Path $ResultsDirectory "dns-working.txt"
@@ -233,9 +234,13 @@ function Start-DnsTesting {
 
     try {
         while ($dnsIndex -lt $totalDns -or $workers.Count -gt 0) {
+            # Check if interrupted from menu
+            if ($global:MenuInterrupted) { break }
 
-            # Fill worker pool up to max
+            # Fill worker pool up to max (skip if we already found one and should stop)
             while ($workers.Count -lt $Config.Workers -and $dnsIndex -lt $totalDns) {
+                if ($StopAfterFound -and $null -ne $bestDns) { break }
+                if ($global:MenuInterrupted) { break }
                 $dns = $DnsList[$dnsIndex]
                 $dnsIndex++
                 try {
@@ -327,6 +332,15 @@ function Start-DnsTesting {
                 $stillActive += $w
             }
             $workers = $stillActive
+
+            # Early exit: stop scanning once we found a working DNS
+            if ($StopAfterFound -and $null -ne $bestDns) {
+                foreach ($w in $workers) {
+                    Stop-TestWorker -Worker $w
+                }
+                $workers = @()
+                break
+            }
 
             Start-Sleep -Milliseconds 200
 

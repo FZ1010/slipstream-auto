@@ -216,8 +216,19 @@ start_dns_testing() {
     local -a active_dns_names=()
 
     while [[ $dns_index -lt $total || ${#active_pids[@]} -gt 0 ]]; do
-        # Fill worker pool
+        # Check if interrupted from menu
+        if [[ "${MENU_INTERRUPTED:-false}" == "true" ]]; then
+            break
+        fi
+
+        # Fill worker pool (skip if we already found one and should stop)
         while [[ ${#active_pids[@]} -lt $max_workers && $dns_index -lt $total ]]; do
+            if [[ -n "$FOUND_DNS" && "${STOP_AFTER_FOUND:-false}" == "true" ]]; then
+                break
+            fi
+            if [[ "${MENU_INTERRUPTED:-false}" == "true" ]]; then
+                break
+            fi
             local dns="${DNS_LIST[$dns_index]}"
             dns_index=$((dns_index + 1))
 
@@ -296,6 +307,21 @@ start_dns_testing() {
         [[ ${#new_pids[@]} -gt 0 ]] && active_pids=("${new_pids[@]}")
         [[ ${#new_files[@]} -gt 0 ]] && active_result_files=("${new_files[@]}")
         [[ ${#new_names[@]} -gt 0 ]] && active_dns_names=("${new_names[@]}")
+
+        # Early exit: stop scanning once we found a working DNS
+        if [[ -n "$FOUND_DNS" && "${STOP_AFTER_FOUND:-false}" == "true" ]]; then
+            # Kill remaining active workers
+            if [[ ${#active_pids[@]} -gt 0 ]]; then
+                for pid in "${active_pids[@]}"; do
+                    kill "$pid" 2>/dev/null || true
+                    wait "$pid" 2>/dev/null || true
+                done
+                active_pids=()
+                active_result_files=()
+                active_dns_names=()
+            fi
+            break
+        fi
 
         sleep 0.2
 

@@ -160,22 +160,17 @@ if (-not $hasOperationalArgs) {
             Write-Host ""
             Write-Log -Message "Testing $priorityCount priority DNS entries first..." -Level Info
             $priorityList = @($dnsList[0..($priorityCount - 1)])
-            $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+            $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir -StopAfterFound
         }
 
-        # Phase 1b: Test remaining DNS (always run to find best match)
-        $remainingCount = $dnsList.Count - $priorityCount
-        if ($remainingCount -gt 0) {
-            Write-Host ""
-            if ($result) {
-                Write-Log -Message "Scanning remaining $remainingCount DNS entries for a better match..." -Level Info
-            } else {
-                Write-Log -Message "Scanning remaining $remainingCount DNS entries..." -Level Info
-            }
-            $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
-            $newResult = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
-            if ($newResult -and ($null -eq $result -or $newResult.Score -lt $result.Score)) {
-                $result = $newResult
+        # Phase 1b: Test remaining DNS (skip if already found)
+        if (-not $result) {
+            $remainingCount = $dnsList.Count - $priorityCount
+            if ($remainingCount -gt 0) {
+                Write-Host ""
+                Write-Log -Message "Scanning $remainingCount DNS entries..." -Level Info
+                $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
+                $result = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir -StopAfterFound
             }
         }
 
@@ -254,15 +249,14 @@ if (-not $hasOperationalArgs) {
 
             if ($priorityCount -gt 0) {
                 $priorityList = @($dnsList[0..($priorityCount - 1)])
-                $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+                $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir -StopAfterFound
             }
 
-            $remainingCount = $dnsList.Count - $priorityCount
-            if ($remainingCount -gt 0) {
-                $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
-                $newResult = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
-                if ($newResult -and ($null -eq $result -or $newResult.Score -lt $result.Score)) {
-                    $result = $newResult
+            if (-not $result) {
+                $remainingCount = $dnsList.Count - $priorityCount
+                if ($remainingCount -gt 0) {
+                    $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
+                    $result = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir -StopAfterFound
                 }
             }
 

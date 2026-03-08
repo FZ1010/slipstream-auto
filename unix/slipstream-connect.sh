@@ -161,6 +161,7 @@ _run_connect_flow() {
     FOUND_DNS=""
     FOUND_PORT=""
     BEST_SCORE=999
+    STOP_AFTER_FOUND=true
 
     echo ""
     log Info "=== Phase 1: Scanning for a working DNS ==="
@@ -252,15 +253,19 @@ _run_connect_flow() {
         FOUND_PORT=""
         BEST_SCORE=999
 
+        STOP_AFTER_FOUND=true
+
         if [[ $PRIORITY_COUNT -gt 0 ]]; then
             DNS_LIST=("${FULL_DNS_LIST[@]:0:$PRIORITY_COUNT}")
             start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
         fi
 
-        remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
-        if [[ $remaining_count -gt 0 ]]; then
-            DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
-            start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
+        if [[ -z "$FOUND_DNS" ]]; then
+            remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
+            if [[ $remaining_count -gt 0 ]]; then
+                DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
+                start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
+            fi
         fi
 
         if [[ -z "$FOUND_DNS" ]]; then
