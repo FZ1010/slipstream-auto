@@ -8,6 +8,7 @@ param(
     [string]$DnsListPath = "",
     [string]$UserDnsPath = "",
     [int]$Workers = 0,
+    [switch]$Connect,
     [switch]$Help
 )
 
@@ -20,6 +21,7 @@ if (-not $scriptRoot) { $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand
 . (Join-Path $scriptRoot "lib\Config.ps1")
 . (Join-Path $scriptRoot "lib\Test-Dns.ps1")
 . (Join-Path $scriptRoot "lib\Connect.ps1")
+. (Join-Path $scriptRoot "lib\Menu.ps1")
 
 # Show help
 if ($Help) {
@@ -37,11 +39,12 @@ OPTIONS:
   -DnsListPath <path>   Path to dns-list.txt (default: .\dns-list.txt)
   -UserDnsPath <path>   Path to your own DNS file (tested first, highest priority)
   -Workers <number>     Override parallel worker count (default: from config)
+  -Connect              Skip menu, connect directly
   -Help                 Show this message
 
 EXAMPLES:
-  .\start.bat                              # Just double-click and go
-  .\slipstream-connect.ps1 -Workers 10     # Test 10 DNS at once
+  .\start.bat                              # Open interactive menu
+  .\slipstream-connect.ps1 -Workers 10     # Bypass menu, connect with 10 workers
   .\slipstream-connect.ps1 -UserDnsPath "C:\my-dns.txt"
   .\slipstream-connect.ps1 -DnsListPath "C:\my-dns.txt"
 
@@ -56,6 +59,9 @@ if (-not $DnsListPath) { $DnsListPath = Join-Path $projectRoot "dns-list.txt" }
 if (-not $UserDnsPath) { $UserDnsPath = Join-Path $projectRoot "dns-custom.txt" }
 $resultsDir = Join-Path $projectRoot "results"
 $exePath = Join-Path $projectRoot "slipstream-client.exe"
+
+# Store the resolved config path for menu usage
+$ConfigPath_Resolved = $ConfigPath
 
 # Initialize logger and show banner
 Write-Banner
@@ -101,137 +107,71 @@ if ($dnsList.Count -eq 0) {
 
 Initialize-SlipstreamTempDir
 
-# ── Ctrl+C cleanup handler ──
-# Ensure all slipstream-client processes we spawned get killed on exit
+# ── Decide: menu or direct connect ──
 
-$cleanupBlock = {
-    Write-Host ""
-    Write-Host "Shutting down... killing slipstream-client processes..." -ForegroundColor Yellow
-    Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Remove-SlipstreamTempDir
-    Write-Host "Goodbye." -ForegroundColor Cyan
-}
+$hasOperationalArgs = $Connect -or $PSBoundParameters.ContainsKey('ConfigPath') -or $PSBoundParameters.ContainsKey('DnsListPath') -or $PSBoundParameters.ContainsKey('UserDnsPath') -or ($Workers -gt 0)
 
-$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupBlock -ErrorAction SilentlyContinue
-
-# Also handle Ctrl+C via trap
-trap {
-    & $cleanupBlock
-    break
-}
-
-try {
-    # ── Phase 1: Find a working DNS ──
-
-    Write-Host ""
-    Write-Log -Message "=== Phase 1: Scanning for a working DNS ===" -Level Info
-
-    $result = $null
-
-    # Phase 1a: Test priority DNS first (tier 0 + tier 1)
-    if ($priorityCount -gt 0) {
+if (-not $hasOperationalArgs) {
+    # Show interactive menu
+    $cleanupBlock = {
         Write-Host ""
-        Write-Log -Message "Testing $priorityCount priority DNS entries first..." -Level Info
-        $priorityList = @($dnsList[0..($priorityCount - 1)])
-        $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+        Write-Host "Shutting down..." -ForegroundColor Yellow
+        Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Remove-SlipstreamTempDir
+        Write-Host "Goodbye." -ForegroundColor Cyan
+    }
+    $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupBlock -ErrorAction SilentlyContinue
+    trap { & $cleanupBlock; break }
+
+    try {
+        Start-MenuLoop -Config $config -ConfigPath $ConfigPath_Resolved -DnsList $dnsList -PriorityCount $priorityCount -ExePath $exePath -ResultsDirectory $resultsDir
+    }
+    finally {
+        Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Remove-SlipstreamTempDir
+    }
+} else {
+    # ── Ctrl+C cleanup handler ──
+    $cleanupBlock = {
+        Write-Host ""
+        Write-Host "Shutting down... killing slipstream-client processes..." -ForegroundColor Yellow
+        Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Remove-SlipstreamTempDir
+        Write-Host "Goodbye." -ForegroundColor Cyan
     }
 
-    # Phase 1b: Test remaining DNS (always run to find best match)
-    $remainingCount = $dnsList.Count - $priorityCount
-    if ($remainingCount -gt 0) {
-        Write-Host ""
-        if ($result) {
-            Write-Log -Message "Scanning remaining $remainingCount DNS entries for a better match..." -Level Info
-        } else {
-            Write-Log -Message "Scanning remaining $remainingCount DNS entries..." -Level Info
-        }
-        $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
-        $newResult = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
-        if ($newResult -and ($null -eq $result -or $newResult.Score -lt $result.Score)) {
-            $result = $newResult
-        }
+    $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $cleanupBlock -ErrorAction SilentlyContinue
+
+    trap {
+        & $cleanupBlock
+        break
     }
 
-    if (-not $result) {
+    try {
+        # ── Phase 1: Find a working DNS ──
+
         Write-Host ""
-        Write-Log -Message "No working DNS found after testing all entries." -Level Error
-        Write-Log -Message "Things to try:" -Level Info
-        Write-Log -Message "  1. Update your dns-list.txt with fresh DNS entries" -Level Info
-        Write-Log -Message "  2. Delete results\dns-failed.txt to re-test previously failed ones" -Level Info
-        Write-Log -Message "  3. Increase Workers in config.ini for faster scanning" -Level Info
-        Write-Log -Message "  4. Try again later - some DNS resolvers are intermittent" -Level Info
-        Read-Host "Press Enter to exit"
-        exit 1
-    }
-
-    Write-Host ""
-    Write-Log -Message "Best DNS: $($result.Dns) (score: $($result.Score)s)" -Level Success
-
-    # ── Phase 2: Connect and maintain ──
-
-    Write-Host ""
-    Write-Log -Message "=== Phase 2: Establishing persistent connection ===" -Level Info
-
-    $reconnectCount = 0
-    $workingDns = $result.Dns
-    $workingPath = Join-Path $resultsDir "dns-working.txt"
-
-    while ($true) {
-        if ($config.MaxReconnectAttempts -gt 0 -and $reconnectCount -ge $config.MaxReconnectAttempts) {
-            Write-Log -Message "Max reconnect attempts ($($config.MaxReconnectAttempts)) reached. Stopping." -Level Error
-            break
-        }
-
-        $port = Get-RandomPort
-
-        if ($reconnectCount -eq 0) {
-            Write-Log -Message "Connecting via $workingDns on port $port..." -Level Info
-        } else {
-            Write-Host ""
-            Write-Log -Message "Reconnecting (attempt $reconnectCount) via $workingDns on port $port..." -Level Warning
-        }
-
-        $connection = Start-SlipstreamConnection -Dns $workingDns -Port $port -Config $config -ExePath $exePath
-
-        if ($null -ne $connection) {
-            Start-Sleep -Milliseconds 500
-            $internetWorks = $false
-            try {
-                $statusCode = & curl.exe --proxy "socks5://127.0.0.1:$port" `
-                    --max-time $config.ConnectivityTimeout `
-                    -s -o NUL -w "%{http_code}" `
-                    $config.ConnectivityUrl 2>$null
-                if ($statusCode -eq "204") { $internetWorks = $true }
-            } catch {}
-
-            if ($internetWorks) {
-                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                Add-Content -Path $workingPath -Value "$workingDns | $timestamp" -Encoding UTF8
-
-                $stillAlive = Watch-Connection -Connection $connection -Port $port -Config $config
-                Stop-Connection -Connection $connection
-            } else {
-                Write-Log -Message "Tunnel up via $workingDns but no internet" -Level Warning
-                Stop-Connection -Connection $connection
-            }
-        } else {
-            Write-Log -Message "Failed to connect via $workingDns" -Level Warning
-        }
-
-        # Connection failed or dropped — re-scan for working DNS
-        $reconnectCount++
-        Write-Host ""
-        Write-Log -Message "Re-scanning for a working DNS..." -Level Warning
+        Write-Log -Message "=== Phase 1: Scanning for a working DNS ===" -Level Info
 
         $result = $null
 
+        # Phase 1a: Test priority DNS first (tier 0 + tier 1)
         if ($priorityCount -gt 0) {
+            Write-Host ""
+            Write-Log -Message "Testing $priorityCount priority DNS entries first..." -Level Info
             $priorityList = @($dnsList[0..($priorityCount - 1)])
             $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
         }
 
+        # Phase 1b: Test remaining DNS (always run to find best match)
         $remainingCount = $dnsList.Count - $priorityCount
         if ($remainingCount -gt 0) {
+            Write-Host ""
+            if ($result) {
+                Write-Log -Message "Scanning remaining $remainingCount DNS entries for a better match..." -Level Info
+            } else {
+                Write-Log -Message "Scanning remaining $remainingCount DNS entries..." -Level Info
+            }
             $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
             $newResult = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
             if ($newResult -and ($null -eq $result -or $newResult.Score -lt $result.Score)) {
@@ -241,23 +181,111 @@ try {
 
         if (-not $result) {
             Write-Host ""
-            Write-Log -Message "No working DNS found after re-scanning." -Level Error
+            Write-Log -Message "No working DNS found after testing all entries." -Level Error
             Write-Log -Message "Things to try:" -Level Info
             Write-Log -Message "  1. Update your dns-list.txt with fresh DNS entries" -Level Info
             Write-Log -Message "  2. Delete results\dns-failed.txt to re-test previously failed ones" -Level Info
             Write-Log -Message "  3. Increase Workers in config.ini for faster scanning" -Level Info
-            break
+            Write-Log -Message "  4. Try again later - some DNS resolvers are intermittent" -Level Info
+            Read-Host "Press Enter to exit"
+            exit 1
         }
 
-        $workingDns = $result.Dns
-    }
-}
-finally {
-    # Always clean up on exit
-    Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Remove-SlipstreamTempDir
-}
+        Write-Host ""
+        Write-Log -Message "Best DNS: $($result.Dns) (score: $($result.Score)s)" -Level Success
 
-Write-Host ""
-Write-Log -Message "SlipStream Connector has stopped." -Level Warning
-Read-Host "Press Enter to exit"
+        # ── Phase 2: Connect and maintain ──
+
+        Write-Host ""
+        Write-Log -Message "=== Phase 2: Establishing persistent connection ===" -Level Info
+
+        $reconnectCount = 0
+        $workingDns = $result.Dns
+        $workingPath = Join-Path $resultsDir "dns-working.txt"
+
+        while ($true) {
+            if ($config.MaxReconnectAttempts -gt 0 -and $reconnectCount -ge $config.MaxReconnectAttempts) {
+                Write-Log -Message "Max reconnect attempts ($($config.MaxReconnectAttempts)) reached. Stopping." -Level Error
+                break
+            }
+
+            $port = Get-RandomPort
+
+            if ($reconnectCount -eq 0) {
+                Write-Log -Message "Connecting via $workingDns on port $port..." -Level Info
+            } else {
+                Write-Host ""
+                Write-Log -Message "Reconnecting (attempt $reconnectCount) via $workingDns on port $port..." -Level Warning
+            }
+
+            $connection = Start-SlipstreamConnection -Dns $workingDns -Port $port -Config $config -ExePath $exePath
+
+            if ($null -ne $connection) {
+                Start-Sleep -Milliseconds 500
+                $internetWorks = $false
+                try {
+                    $statusCode = & curl.exe --proxy "socks5://127.0.0.1:$port" `
+                        --max-time $config.ConnectivityTimeout `
+                        -s -o NUL -w "%{http_code}" `
+                        $config.ConnectivityUrl 2>$null
+                    if ($statusCode -eq "204") { $internetWorks = $true }
+                } catch {}
+
+                if ($internetWorks) {
+                    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                    Add-Content -Path $workingPath -Value "$workingDns | $timestamp" -Encoding UTF8
+
+                    $stillAlive = Watch-Connection -Connection $connection -Port $port -Config $config
+                    Stop-Connection -Connection $connection
+                } else {
+                    Write-Log -Message "Tunnel up via $workingDns but no internet" -Level Warning
+                    Stop-Connection -Connection $connection
+                }
+            } else {
+                Write-Log -Message "Failed to connect via $workingDns" -Level Warning
+            }
+
+            # Connection failed or dropped — re-scan for working DNS
+            $reconnectCount++
+            Write-Host ""
+            Write-Log -Message "Re-scanning for a working DNS..." -Level Warning
+
+            $result = $null
+
+            if ($priorityCount -gt 0) {
+                $priorityList = @($dnsList[0..($priorityCount - 1)])
+                $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+            }
+
+            $remainingCount = $dnsList.Count - $priorityCount
+            if ($remainingCount -gt 0) {
+                $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
+                $newResult = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+                if ($newResult -and ($null -eq $result -or $newResult.Score -lt $result.Score)) {
+                    $result = $newResult
+                }
+            }
+
+            if (-not $result) {
+                Write-Host ""
+                Write-Log -Message "No working DNS found after re-scanning." -Level Error
+                Write-Log -Message "Things to try:" -Level Info
+                Write-Log -Message "  1. Update your dns-list.txt with fresh DNS entries" -Level Info
+                Write-Log -Message "  2. Delete results\dns-failed.txt to re-test previously failed ones" -Level Info
+                Write-Log -Message "  3. Increase Workers in config.ini for faster scanning" -Level Info
+                break
+            }
+
+            $workingDns = $result.Dns
+        }
+    }
+    finally {
+        # Always clean up on exit
+        Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Remove-SlipstreamTempDir
+    }
+
+    Write-Host ""
+    Write-Log -Message "SlipStream Connector has stopped." -Level Warning
+    Read-Host "Press Enter to exit"
+}
