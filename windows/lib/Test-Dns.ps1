@@ -8,6 +8,38 @@
 #   - "Connection ready" = tunnel is up (proceed to connectivity check)
 #   - "became unavailable" = resolver is dead (FAIL immediately)
 #   - Other WARN lines (e.g. cert warnings at startup) are NORMAL and ignored
+#
+# Temp files use a dedicated directory ($env:TEMP\slipstream-auto) to avoid filling
+# the system temp folder. The directory is cleaned on startup and exit.
+
+$script:SlipstreamTempDir = $null
+
+function Initialize-SlipstreamTempDir {
+    $dir = Join-Path $env:TEMP "slipstream-auto"
+    if (Test-Path $dir) {
+        # Clean stale files from previous crashed runs
+        Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    } else {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $script:SlipstreamTempDir = $dir
+}
+
+function Remove-SlipstreamTempDir {
+    if ($script:SlipstreamTempDir -and (Test-Path $script:SlipstreamTempDir)) {
+        Get-ChildItem $script:SlipstreamTempDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function New-SlipstreamTempFile {
+    if (-not $script:SlipstreamTempDir -or -not (Test-Path $script:SlipstreamTempDir)) {
+        Initialize-SlipstreamTempDir
+    }
+    $name = [System.IO.Path]::GetRandomFileName()
+    $path = Join-Path $script:SlipstreamTempDir $name
+    [System.IO.File]::Create($path).Close()
+    return $path
+}
 
 function Get-RandomPort {
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -69,7 +101,7 @@ function Test-SingleDnsViaFile {
     )
 
     $port = Get-RandomPort
-    $tempFile = [System.IO.Path]::GetTempFileName()
+    $tempFile = New-SlipstreamTempFile
 
     $arguments = "--domain $($Config.Domain) --congestion-control $($Config.CongestionControl) --keep-alive-interval $($Config.KeepAliveInterval) --tcp-listen-port $port --resolver $Dns"
 
@@ -135,6 +167,37 @@ function Stop-TestWorker {
     try { if (Test-Path $Worker.ErrFile) { Remove-Item $Worker.ErrFile -Force } } catch {}
 }
 
+function Save-WorkingDns {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Dns,
+        [Parameter(Mandatory)]
+        [double]$Score,
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $newLine = "$Dns | $timestamp | $Score"
+
+    # Read existing entries, remove duplicate for this DNS
+    $lines = @()
+    if (Test-Path $Path) {
+        $lines = @(Get-Content $Path -Encoding UTF8 | Where-Object {
+            $_ -notmatch "^\s*$([regex]::Escape($Dns))\s*\|"
+        })
+    }
+    $lines += $newLine
+
+    # Sort by score (3rd field, ascending = best first)
+    $sorted = $lines | Where-Object { $_.Trim() -ne '' } | Sort-Object {
+        $parts = $_ -split '\|'
+        if ($parts.Count -ge 3) { [double]$parts[2].Trim() } else { 999 }
+    }
+
+    $sorted | Set-Content $Path -Encoding UTF8
+}
+
 function Start-DnsTesting {
     param(
         [Parameter(Mandatory)]
@@ -156,8 +219,10 @@ function Start-DnsTesting {
 
     $totalDns = $DnsList.Count
     $tested = 0
-    $found = $null
     $dnsIndex = 0
+    $bestDns = $null
+    $bestScore = 999.0
+    $lastProgress = 0
 
     Write-Log -Message "Starting DNS testing with $($Config.Workers) parallel workers..." -Level Info
     Write-Log -Message "Testing $totalDns DNS entries (timeout: $($Config.Timeout)s per entry)" -Level Info
@@ -168,7 +233,6 @@ function Start-DnsTesting {
 
     try {
         while ($dnsIndex -lt $totalDns -or $workers.Count -gt 0) {
-            if ($found) { break }
 
             # Fill worker pool up to max
             while ($workers.Count -lt $Config.Workers -and $dnsIndex -lt $totalDns) {
@@ -201,19 +265,33 @@ function Start-DnsTesting {
 
                 # Check for connection ready
                 if ($output -match "Connection ready") {
-                    Write-Log -Message "Tunnel up for $($w.Dns), verifying internet..." -Level Info
+                    $establishTime = ((Get-Date) - $w.Started).TotalSeconds
 
-                    # Small delay for proxy to initialize
                     Start-Sleep -Milliseconds 500
 
-                    if (Test-Connectivity -Port $w.Port -Config $Config) {
-                        Write-Log -Message "FOUND working DNS: $($w.Dns)" -Level Success
-                        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                        Add-Content -Path $workingPath -Value "$($w.Dns) | $timestamp" -Encoding UTF8
-                        $found = @{ Dns = $w.Dns; Port = $w.Port }
+                    $curlStart = Get-Date
+                    $connected = Test-Connectivity -Port $w.Port -Config $Config
+                    $curlLatency = ((Get-Date) - $curlStart).TotalSeconds
+                    $score = [Math]::Round($establishTime + $curlLatency, 1)
+
+                    if ($connected) {
+                        Save-WorkingDns -Dns $w.Dns -Score $score -Path $workingPath
+
+                        if ($null -eq $bestDns) {
+                            Write-Log -Message "FOUND working DNS: $($w.Dns) (score: ${score}s)" -Level Success
+                            $bestDns = @{ Dns = $w.Dns; Port = $w.Port; Score = $score }
+                            $bestScore = $score
+                        } elseif ($score -lt $bestScore) {
+                            Write-Log -Message "FOUND better DNS: $($w.Dns) (score: ${score}s, was: ${bestScore}s)" -Level Success
+                            $bestDns = @{ Dns = $w.Dns; Port = $w.Port; Score = $score }
+                            $bestScore = $score
+                        } else {
+                            Write-Log -Message "Found working DNS: $($w.Dns) (score: ${score}s, best: ${bestScore}s)" -Level Info
+                        }
+
                         Stop-TestWorker -Worker $w
                         $tested++
-                        break
+                        continue
                     }
                     else {
                         Write-Log -Message "FAIL: $($w.Dns) - Tunnel up but no internet" -Level Debug
@@ -250,12 +328,11 @@ function Start-DnsTesting {
             }
             $workers = $stillActive
 
-            if (-not $found) {
-                Start-Sleep -Milliseconds 200
-            }
+            Start-Sleep -Milliseconds 200
 
             # Progress update every batch
-            if ($tested -gt 0 -and $tested % $Config.Workers -eq 0) {
+            if ($tested -gt 0 -and $tested -ne $lastProgress -and $tested % $Config.Workers -eq 0) {
+                $lastProgress = $tested
                 $percent = [Math]::Round(($tested / $totalDns) * 100, 1)
                 Write-Log -Message "Progress: $tested / $totalDns ($percent%)" -Level Info
             }
@@ -268,9 +345,9 @@ function Start-DnsTesting {
         }
     }
 
-    if (-not $found -and $tested -gt 0) {
+    if (-not $bestDns -and $tested -gt 0) {
         Write-Log -Message "Tested $tested DNS entries, none worked." -Level Warning
     }
 
-    return $found
+    return $bestDns
 }

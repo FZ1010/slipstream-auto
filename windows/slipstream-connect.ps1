@@ -97,6 +97,10 @@ if ($dnsList.Count -eq 0) {
     exit 1
 }
 
+# ── Initialize temp directory (clean stale files from previous runs) ──
+
+Initialize-SlipstreamTempDir
+
 # ── Ctrl+C cleanup handler ──
 # Ensure all slipstream-client processes we spawned get killed on exit
 
@@ -104,6 +108,7 @@ $cleanupBlock = {
     Write-Host ""
     Write-Host "Shutting down... killing slipstream-client processes..." -ForegroundColor Yellow
     Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Remove-SlipstreamTempDir
     Write-Host "Goodbye." -ForegroundColor Cyan
 }
 
@@ -131,14 +136,19 @@ try {
         $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
     }
 
-    # Phase 1b: If no priority DNS worked, test the rest
-    if (-not $result) {
-        $remainingCount = $dnsList.Count - $priorityCount
-        if ($remainingCount -gt 0) {
-            Write-Host ""
+    # Phase 1b: Test remaining DNS (always run to find best match)
+    $remainingCount = $dnsList.Count - $priorityCount
+    if ($remainingCount -gt 0) {
+        Write-Host ""
+        if ($result) {
+            Write-Log -Message "Scanning remaining $remainingCount DNS entries for a better match..." -Level Info
+        } else {
             Write-Log -Message "Scanning remaining $remainingCount DNS entries..." -Level Info
-            $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
-            $result = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+        }
+        $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
+        $newResult = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+        if ($newResult -and ($null -eq $result -or $newResult.Score -lt $result.Score)) {
+            $result = $newResult
         }
     }
 
@@ -153,6 +163,9 @@ try {
         Read-Host "Press Enter to exit"
         exit 1
     }
+
+    Write-Host ""
+    Write-Log -Message "Best DNS: $($result.Dns) (score: $($result.Score)s)" -Level Success
 
     # ── Phase 2: Connect and maintain ──
 
@@ -217,11 +230,12 @@ try {
             $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
         }
 
-        if (-not $result) {
-            $remainingCount = $dnsList.Count - $priorityCount
-            if ($remainingCount -gt 0) {
-                $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
-                $result = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+        $remainingCount = $dnsList.Count - $priorityCount
+        if ($remainingCount -gt 0) {
+            $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
+            $newResult = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+            if ($newResult -and ($null -eq $result -or $newResult.Score -lt $result.Score)) {
+                $result = $newResult
             }
         }
 
@@ -241,6 +255,7 @@ try {
 finally {
     # Always clean up on exit
     Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Remove-SlipstreamTempDir
 }
 
 Write-Host ""

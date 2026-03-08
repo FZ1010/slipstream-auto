@@ -12,6 +12,24 @@
 # Track child PIDs for cleanup
 WORKER_PIDS=()
 
+# Dedicated temp directory — avoids leaking files into /tmp on crash
+SLIPSTREAM_TEMP_DIR=""
+
+init_slipstream_temp_dir() {
+    # Clean stale dirs from previous crashed runs (owned by current user)
+    for d in "${TMPDIR:-/tmp}"/slipstream-auto.*; do
+        [[ -d "$d" ]] && rm -rf "$d"
+    done
+    SLIPSTREAM_TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/slipstream-auto.XXXXXX")
+}
+
+cleanup_slipstream_temp_dir() {
+    if [[ -n "$SLIPSTREAM_TEMP_DIR" && -d "$SLIPSTREAM_TEMP_DIR" ]]; then
+        rm -rf "$SLIPSTREAM_TEMP_DIR"
+        SLIPSTREAM_TEMP_DIR=""
+    fi
+}
+
 get_random_port() {
     if command -v python3 &>/dev/null; then
         python3 -c "
@@ -66,9 +84,10 @@ _test_worker() {
 
     local port
     port=$(get_random_port)
+    local start_time=$(date +%s)
 
     local out_file
-    out_file=$(mktemp)
+    out_file=$(mktemp "$SLIPSTREAM_TEMP_DIR/out.XXXXXX")
 
     "$exe_path" \
         --domain "${CONFIG[Domain]}" \
@@ -100,6 +119,7 @@ _test_worker() {
 
         if [[ "$output" == *"Connection ready"* ]]; then
             connected=true
+            local establish_time=$(( $(date +%s) - start_time ))
             break
         fi
 
@@ -116,15 +136,58 @@ _test_worker() {
 
     sleep 0.5
 
-    if test_connectivity "$port"; then
-        echo "PASS|$dns|$port|Internet verified" > "$result_file"
+    local curl_result
+    curl_result=$(curl --proxy "socks5://127.0.0.1:$port" \
+        --max-time "${CONFIG[ConnectivityTimeout]}" \
+        -s -o /dev/null -w "%{http_code}|%{time_total}" \
+        "${CONFIG[ConnectivityUrl]}" 2>/dev/null) || true
+
+    local curl_status="${curl_result%%|*}"
+    local curl_latency="${curl_result#*|}"
+
+    if [[ "$curl_status" == "204" ]]; then
+        local score
+        score=$(awk "BEGIN { printf \"%.1f\", $establish_time + $curl_latency }")
+        echo "PASS|$dns|$port|$score" > "$result_file"
     else
-        echo "FAIL|$dns|$port|Tunnel up but no internet" > "$result_file"
+        # Try fallback URL
+        local body
+        body=$(curl --proxy "socks5://127.0.0.1:$port" \
+            --max-time "${CONFIG[ConnectivityTimeout]}" \
+            -s "${CONFIG[FallbackUrl]}" 2>/dev/null) || true
+        if [[ "$body" == *"Microsoft Connect Test"* ]]; then
+            local score
+            score=$(awk "BEGIN { printf \"%.1f\", $establish_time + $curl_latency }")
+            echo "PASS|$dns|$port|$score" > "$result_file"
+        else
+            echo "FAIL|$dns|$port|Tunnel up but no internet" > "$result_file"
+        fi
     fi
 
     kill "$slip_pid" 2>/dev/null || true
     wait "$slip_pid" 2>/dev/null || true
     rm -f "$out_file"
+}
+
+_save_working_dns() {
+    local dns="$1"
+    local score="$2"
+    local working_path="$3"
+
+    local timestamp
+    timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+
+    # Remove existing entry for this DNS (if any)
+    if [[ -f "$working_path" ]]; then
+        grep -v "^${dns} |" "$working_path" > "${working_path}.tmp" 2>/dev/null || true
+        mv "${working_path}.tmp" "$working_path"
+    fi
+
+    # Append new entry
+    echo "$dns | $timestamp | $score" >> "$working_path"
+
+    # Sort by score (3rd field, numeric ascending = best first)
+    sort -t'|' -k3 -g "$working_path" -o "$working_path"
 }
 
 start_dns_testing() {
@@ -145,10 +208,8 @@ start_dns_testing() {
     echo ""
 
     local result_dir
-    result_dir=$(mktemp -d)
-
-    FOUND_DNS=""
-    FOUND_PORT=""
+    result_dir="$SLIPSTREAM_TEMP_DIR/results"
+    mkdir -p "$result_dir"
 
     local -a active_pids=()
     local -a active_result_files=()
@@ -193,14 +254,22 @@ start_dns_testing() {
                 tested=$((tested + 1))
 
                 if [[ "$status" == "PASS" ]]; then
-                    log Success "FOUND working DNS: $r_dns"
-                    local timestamp
-                    timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-                    echo "$r_dns | $timestamp" >> "$working_path"
-                    FOUND_DNS="$r_dns"
-                    FOUND_PORT="$r_port"
-                    rm -f "$rfile"
-                    break 2
+                    local r_score="$r_detail"
+                    _save_working_dns "$r_dns" "$r_score" "$working_path"
+
+                    if [[ -z "$FOUND_DNS" ]]; then
+                        log Success "FOUND working DNS: $r_dns (score: ${r_score}s)"
+                        FOUND_DNS="$r_dns"
+                        FOUND_PORT="$r_port"
+                        BEST_SCORE="$r_score"
+                    elif awk "BEGIN { exit ($r_score < $BEST_SCORE) ? 0 : 1 }"; then
+                        log Success "FOUND better DNS: $r_dns (score: ${r_score}s, was: ${BEST_SCORE}s)"
+                        FOUND_DNS="$r_dns"
+                        FOUND_PORT="$r_port"
+                        BEST_SCORE="$r_score"
+                    else
+                        log Info "Found working DNS: $r_dns (score: ${r_score}s, best: ${BEST_SCORE}s)"
+                    fi
                 else
                     log Debug "FAIL: $r_dns - $r_detail"
                     local timestamp
