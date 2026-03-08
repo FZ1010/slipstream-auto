@@ -54,7 +54,6 @@ $projectRoot = Split-Path $scriptRoot -Parent
 if (-not $ConfigPath) { $ConfigPath = Join-Path $projectRoot "config.ini" }
 if (-not $DnsListPath) { $DnsListPath = Join-Path $projectRoot "dns-list.txt" }
 if (-not $UserDnsPath) { $UserDnsPath = Join-Path $projectRoot "dns-custom.txt" }
-$resolversPath = Join-Path $projectRoot "dns-resolvers.txt"
 $resultsDir = Join-Path $projectRoot "results"
 $exePath = Join-Path $projectRoot "slipstream-client.exe"
 
@@ -89,7 +88,7 @@ Write-Host ""
 
 # ── Load DNS list ──
 
-$dnsData = Read-DnsList -Path $DnsListPath -ResolversPath $resolversPath -CustomPath $UserDnsPath -Config $config -ResultsDirectory $resultsDir
+$dnsData = Read-DnsList -Path $DnsListPath -CustomPath $UserDnsPath -Config $config -ResultsDirectory $resultsDir
 $dnsList = $dnsData.DnsList
 $priorityCount = $dnsData.PriorityCount
 if ($dnsList.Count -eq 0) {
