@@ -116,6 +116,10 @@ fi
 # Save full list for reconnection loop
 FULL_DNS_LIST=("${DNS_LIST[@]}")
 
+# ── Initialize temp directory (clean on startup for crash leftovers) ──
+
+init_slipstream_temp_dir
+
 # ── Cleanup on exit (Ctrl+C, kill, etc.) ──
 
 cleanup() {
@@ -134,6 +138,9 @@ cleanup() {
 
     # Kill any remaining slipstream-client processes we spawned
     pkill -P $$ slipstream-client 2>/dev/null || true
+
+    # Clean up temp directory
+    cleanup_slipstream_temp_dir
 
     log Info "Goodbye."
     exit 0

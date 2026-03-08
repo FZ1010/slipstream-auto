@@ -8,6 +8,38 @@
 #   - "Connection ready" = tunnel is up (proceed to connectivity check)
 #   - "became unavailable" = resolver is dead (FAIL immediately)
 #   - Other WARN lines (e.g. cert warnings at startup) are NORMAL and ignored
+#
+# Temp files use a dedicated directory ($env:TEMP\slipstream-auto) to avoid filling
+# the system temp folder. The directory is cleaned on startup and exit.
+
+$script:SlipstreamTempDir = $null
+
+function Initialize-SlipstreamTempDir {
+    $dir = Join-Path $env:TEMP "slipstream-auto"
+    if (Test-Path $dir) {
+        # Clean stale files from previous crashed runs
+        Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    } else {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $script:SlipstreamTempDir = $dir
+}
+
+function Remove-SlipstreamTempDir {
+    if ($script:SlipstreamTempDir -and (Test-Path $script:SlipstreamTempDir)) {
+        Get-ChildItem $script:SlipstreamTempDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function New-SlipstreamTempFile {
+    if (-not $script:SlipstreamTempDir -or -not (Test-Path $script:SlipstreamTempDir)) {
+        Initialize-SlipstreamTempDir
+    }
+    $name = [System.IO.Path]::GetRandomFileName()
+    $path = Join-Path $script:SlipstreamTempDir $name
+    [System.IO.File]::Create($path).Close()
+    return $path
+}
 
 function Get-RandomPort {
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -69,7 +101,7 @@ function Test-SingleDnsViaFile {
     )
 
     $port = Get-RandomPort
-    $tempFile = [System.IO.Path]::GetTempFileName()
+    $tempFile = New-SlipstreamTempFile
 
     $arguments = "--domain $($Config.Domain) --congestion-control $($Config.CongestionControl) --keep-alive-interval $($Config.KeepAliveInterval) --tcp-listen-port $port --resolver $Dns"
 

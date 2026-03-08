@@ -12,6 +12,24 @@
 # Track child PIDs for cleanup
 WORKER_PIDS=()
 
+# Dedicated temp directory — avoids leaking files into /tmp on crash
+SLIPSTREAM_TEMP_DIR=""
+
+init_slipstream_temp_dir() {
+    # Clean stale dirs from previous crashed runs (owned by current user)
+    for d in "${TMPDIR:-/tmp}"/slipstream-auto.*; do
+        [[ -d "$d" ]] && rm -rf "$d"
+    done
+    SLIPSTREAM_TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/slipstream-auto.XXXXXX")
+}
+
+cleanup_slipstream_temp_dir() {
+    if [[ -n "$SLIPSTREAM_TEMP_DIR" && -d "$SLIPSTREAM_TEMP_DIR" ]]; then
+        rm -rf "$SLIPSTREAM_TEMP_DIR"
+        SLIPSTREAM_TEMP_DIR=""
+    fi
+}
+
 get_random_port() {
     if command -v python3 &>/dev/null; then
         python3 -c "
@@ -68,7 +86,7 @@ _test_worker() {
     port=$(get_random_port)
 
     local out_file
-    out_file=$(mktemp)
+    out_file=$(mktemp "$SLIPSTREAM_TEMP_DIR/out.XXXXXX")
 
     "$exe_path" \
         --domain "${CONFIG[Domain]}" \
@@ -145,7 +163,8 @@ start_dns_testing() {
     echo ""
 
     local result_dir
-    result_dir=$(mktemp -d)
+    result_dir="$SLIPSTREAM_TEMP_DIR/results"
+    mkdir -p "$result_dir"
 
     FOUND_DNS=""
     FOUND_PORT=""
