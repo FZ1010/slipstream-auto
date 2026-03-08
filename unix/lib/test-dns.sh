@@ -211,6 +211,9 @@ start_dns_testing() {
     result_dir="$SLIPSTREAM_TEMP_DIR/results"
     mkdir -p "$result_dir"
 
+    FOUND_DNS=""
+    FOUND_PORT=""
+
     local -a active_pids=()
     local -a active_result_files=()
     local -a active_dns_names=()
