@@ -167,6 +167,37 @@ function Stop-TestWorker {
     try { if (Test-Path $Worker.ErrFile) { Remove-Item $Worker.ErrFile -Force } } catch {}
 }
 
+function Save-WorkingDns {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Dns,
+        [Parameter(Mandatory)]
+        [double]$Score,
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $newLine = "$Dns | $timestamp | $Score"
+
+    # Read existing entries, remove duplicate for this DNS
+    $lines = @()
+    if (Test-Path $Path) {
+        $lines = @(Get-Content $Path -Encoding UTF8 | Where-Object {
+            $_ -notmatch "^\s*$([regex]::Escape($Dns))\s*\|"
+        })
+    }
+    $lines += $newLine
+
+    # Sort by score (3rd field, ascending = best first)
+    $sorted = $lines | Where-Object { $_.Trim() -ne '' } | Sort-Object {
+        $parts = $_ -split '\|'
+        if ($parts.Count -ge 3) { [double]$parts[2].Trim() } else { 999 }
+    }
+
+    $sorted | Set-Content $Path -Encoding UTF8
+}
+
 function Start-DnsTesting {
     param(
         [Parameter(Mandatory)]
@@ -176,7 +207,8 @@ function Start-DnsTesting {
         [Parameter(Mandatory)]
         [string]$ExePath,
         [Parameter(Mandatory)]
-        [string]$ResultsDirectory
+        [string]$ResultsDirectory,
+        [switch]$StopAfterFound
     )
 
     $workingPath = Join-Path $ResultsDirectory "dns-working.txt"
@@ -188,8 +220,10 @@ function Start-DnsTesting {
 
     $totalDns = $DnsList.Count
     $tested = 0
-    $found = $null
     $dnsIndex = 0
+    $bestDns = $null
+    $bestScore = 999.0
+    $lastProgress = 0
 
     Write-Log -Message "Starting DNS testing with $($Config.Workers) parallel workers..." -Level Info
     Write-Log -Message "Testing $totalDns DNS entries (timeout: $($Config.Timeout)s per entry)" -Level Info
@@ -200,10 +234,13 @@ function Start-DnsTesting {
 
     try {
         while ($dnsIndex -lt $totalDns -or $workers.Count -gt 0) {
-            if ($found) { break }
+            # Check if interrupted from menu
+            if ($global:MenuInterrupted) { break }
 
-            # Fill worker pool up to max
+            # Fill worker pool up to max (skip if we already found one and should stop)
             while ($workers.Count -lt $Config.Workers -and $dnsIndex -lt $totalDns) {
+                if ($StopAfterFound -and $null -ne $bestDns) { break }
+                if ($global:MenuInterrupted) { break }
                 $dns = $DnsList[$dnsIndex]
                 $dnsIndex++
                 try {
@@ -233,19 +270,33 @@ function Start-DnsTesting {
 
                 # Check for connection ready
                 if ($output -match "Connection ready") {
-                    Write-Log -Message "Tunnel up for $($w.Dns), verifying internet..." -Level Info
+                    $establishTime = ((Get-Date) - $w.Started).TotalSeconds
 
-                    # Small delay for proxy to initialize
                     Start-Sleep -Milliseconds 500
 
-                    if (Test-Connectivity -Port $w.Port -Config $Config) {
-                        Write-Log -Message "FOUND working DNS: $($w.Dns)" -Level Success
-                        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                        Add-Content -Path $workingPath -Value "$($w.Dns) | $timestamp" -Encoding UTF8
-                        $found = @{ Dns = $w.Dns; Port = $w.Port }
+                    $curlStart = Get-Date
+                    $connected = Test-Connectivity -Port $w.Port -Config $Config
+                    $curlLatency = ((Get-Date) - $curlStart).TotalSeconds
+                    $score = [Math]::Round($establishTime + $curlLatency, 1)
+
+                    if ($connected) {
+                        Save-WorkingDns -Dns $w.Dns -Score $score -Path $workingPath
+
+                        if ($null -eq $bestDns) {
+                            Write-Log -Message "FOUND working DNS: $($w.Dns) (score: ${score}s)" -Level Success
+                            $bestDns = @{ Dns = $w.Dns; Port = $w.Port; Score = $score }
+                            $bestScore = $score
+                        } elseif ($score -lt $bestScore) {
+                            Write-Log -Message "FOUND better DNS: $($w.Dns) (score: ${score}s, was: ${bestScore}s)" -Level Success
+                            $bestDns = @{ Dns = $w.Dns; Port = $w.Port; Score = $score }
+                            $bestScore = $score
+                        } else {
+                            Write-Log -Message "Found working DNS: $($w.Dns) (score: ${score}s, best: ${bestScore}s)" -Level Info
+                        }
+
                         Stop-TestWorker -Worker $w
                         $tested++
-                        break
+                        continue
                     }
                     else {
                         Write-Log -Message "FAIL: $($w.Dns) - Tunnel up but no internet" -Level Debug
@@ -282,12 +333,20 @@ function Start-DnsTesting {
             }
             $workers = $stillActive
 
-            if (-not $found) {
-                Start-Sleep -Milliseconds 200
+            # Early exit: stop scanning once we found a working DNS
+            if ($StopAfterFound -and $null -ne $bestDns) {
+                foreach ($w in $workers) {
+                    Stop-TestWorker -Worker $w
+                }
+                $workers = @()
+                break
             }
 
+            Start-Sleep -Milliseconds 200
+
             # Progress update every batch
-            if ($tested -gt 0 -and $tested % $Config.Workers -eq 0) {
+            if ($tested -gt 0 -and $tested -ne $lastProgress -and $tested % $Config.Workers -eq 0) {
+                $lastProgress = $tested
                 $percent = [Math]::Round(($tested / $totalDns) * 100, 1)
                 Write-Log -Message "Progress: $tested / $totalDns ($percent%)" -Level Info
             }
@@ -300,9 +359,9 @@ function Start-DnsTesting {
         }
     }
 
-    if (-not $found -and $tested -gt 0) {
+    if (-not $bestDns -and $tested -gt 0) {
         Write-Log -Message "Tested $tested DNS entries, none worked." -Level Warning
     }
 
-    return $found
+    return $bestDns
 }

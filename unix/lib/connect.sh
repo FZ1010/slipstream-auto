@@ -78,6 +78,11 @@ watch_connection() {
     while kill -0 "$ACTIVE_PID" 2>/dev/null; do
         sleep "${CONFIG[HealthCheckInterval]}"
 
+        # Check if interrupted from menu
+        if [[ "${MENU_INTERRUPTED:-false}" == "true" ]]; then
+            return 1
+        fi
+
         local output
         output=$(cat "$ACTIVE_OUT_FILE" 2>/dev/null) || true
         if [[ "$output" == *"became unavailable"* ]]; then

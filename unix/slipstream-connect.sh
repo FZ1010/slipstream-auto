@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/lib/logger.sh"
 source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/test-dns.sh"
 source "$SCRIPT_DIR/lib/connect.sh"
+source "$SCRIPT_DIR/lib/menu.sh"
 
 # ── Parse arguments ──
 
@@ -22,13 +23,18 @@ DNS_LIST_PATH=""
 CUSTOM_DNS_PATH=""
 WORKERS_OVERRIDE=0
 SHOW_HELP=false
+FORCE_CONNECT=false
+CONFIG_PATH_ARG=""
+DNS_LIST_PATH_ARG=""
+CUSTOM_DNS_PATH_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -c|--config)     CONFIG_PATH="$2"; shift 2 ;;
-        -d|--dns-list)   DNS_LIST_PATH="$2"; shift 2 ;;
-        -u|--user-dns)   CUSTOM_DNS_PATH="$2"; shift 2 ;;
+        -c|--config)     CONFIG_PATH="$2"; CONFIG_PATH_ARG="$2"; shift 2 ;;
+        -d|--dns-list)   DNS_LIST_PATH="$2"; DNS_LIST_PATH_ARG="$2"; shift 2 ;;
+        -u|--user-dns)   CUSTOM_DNS_PATH="$2"; CUSTOM_DNS_PATH_ARG="$2"; shift 2 ;;
         -w|--workers)    WORKERS_OVERRIDE="$2"; shift 2 ;;
+        --connect)       FORCE_CONNECT=true; shift ;;
         -h|--help)       SHOW_HELP=true; shift ;;
         *)               echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -49,12 +55,13 @@ OPTIONS:
   -d, --dns-list <path>   Path to dns-list.txt (default: ./dns-list.txt)
   -u, --user-dns <path>   Path to your own DNS file (tested first, highest priority)
   -w, --workers <number>  Override parallel worker count (default: from config)
+  --connect               Skip menu, connect directly
   -h, --help              Show this message
 
 EXAMPLES:
-  ./start.sh                                   # Just run and go
-  ./slipstream-connect.sh -w 10                # Test 10 DNS at once
-  ./slipstream-connect.sh -u my-dns.txt        # Use your own DNS list first
+  ./start.sh                                   # Open interactive menu
+  ./slipstream-connect.sh -w 10                # Bypass menu, connect with 10 workers
+  ./slipstream-connect.sh -u my-dns.txt        # Bypass menu, use custom DNS list
   ./slipstream-connect.sh -d /path/to/dns.txt
 
 HELP
@@ -98,15 +105,13 @@ fi
 read_config "$CONFIG_PATH"
 [[ $WORKERS_OVERRIDE -gt 0 ]] && CONFIG[Workers]="$WORKERS_OVERRIDE"
 
-log Info "Domain: ${CONFIG[Domain]}"
-log Info "Workers: ${CONFIG[Workers]} | Timeout: ${CONFIG[Timeout]}s | Health check: ${CONFIG[HealthCheckInterval]}s"
-echo ""
-
 # ── Load DNS list ──
 
 DNS_LIST=()
 PRIORITY_COUNT=0
 read_dns_list "$CUSTOM_DNS_PATH" "$DNS_LIST_PATH" "$RESULTS_DIR"
+
+show_config_summary
 
 if [[ ${#DNS_LIST[@]} -eq 0 ]]; then
     log Error "No DNS entries to test! Check your dns-list.txt file."
@@ -148,118 +153,138 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
-# ── Phase 1: Find a working DNS ──
+# ── Direct connect flow (extracted from old Phase 1 + Phase 2) ──
 
-FOUND_DNS=""
-FOUND_PORT=""
-
-echo ""
-log Info "=== Phase 1: Scanning for a working DNS ==="
-
-# Phase 1a: Test priority DNS first (tier 0 + tier 1)
-if [[ $PRIORITY_COUNT -gt 0 ]]; then
-    echo ""
-    log Info "Testing $PRIORITY_COUNT priority DNS entries first..."
-    DNS_LIST=("${FULL_DNS_LIST[@]:0:$PRIORITY_COUNT}")
-    start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
-fi
-
-# Phase 1b: If no priority DNS worked, test the rest
-if [[ -z "$FOUND_DNS" ]]; then
-    remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
-    if [[ $remaining_count -gt 0 ]]; then
-        echo ""
-        log Info "Scanning remaining $remaining_count DNS entries..."
-        DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
-        start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
-    fi
-fi
-
-if [[ -z "$FOUND_DNS" ]]; then
-    echo ""
-    log Error "No working DNS found after testing all entries."
-    log Info "Things to try:"
-    log Info "  1. Update your dns-list.txt with fresh DNS entries"
-    log Info "  2. Delete results/dns-failed.txt to re-test previously failed ones"
-    log Info "  3. Increase Workers in config.ini for faster scanning"
-    log Info "  4. Try again later - some DNS resolvers are intermittent"
-    exit 1
-fi
-
-# ── Phase 2: Connect and maintain ──
-
-echo ""
-log Info "=== Phase 2: Establishing persistent connection ==="
-
-reconnect_count=0
-
-while true; do
-    if [[ ${CONFIG[MaxReconnectAttempts]} -gt 0 && $reconnect_count -ge ${CONFIG[MaxReconnectAttempts]} ]]; then
-        log Error "Max reconnect attempts (${CONFIG[MaxReconnectAttempts]}) reached. Stopping."
-        break
-    fi
-
-    port=$(get_random_port)
-
-    if [[ $reconnect_count -eq 0 ]]; then
-        log Info "Connecting via $FOUND_DNS on port $port..."
-    else
-        echo ""
-        log Warning "Reconnecting (attempt $reconnect_count) via $FOUND_DNS on port $port..."
-    fi
-
-    if start_slipstream_connection "$FOUND_DNS" "$port" "$EXE_PATH"; then
-        sleep 0.5
-        status_code=$(curl --proxy "socks5://127.0.0.1:$port" \
-            --max-time "${CONFIG[ConnectivityTimeout]}" \
-            -s -o /dev/null -w "%{http_code}" \
-            "${CONFIG[ConnectivityUrl]}" 2>/dev/null) || true
-
-        if [[ "$status_code" == "204" ]]; then
-            timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-            echo "$FOUND_DNS | $timestamp" >> "$RESULTS_DIR/dns-working.txt"
-
-            watch_connection "$port"
-            stop_active_connection
-        else
-            log Warning "Tunnel up via $FOUND_DNS but no internet"
-            stop_active_connection
-        fi
-    else
-        log Warning "Failed to connect via $FOUND_DNS"
-    fi
-
-    # Connection failed or dropped — re-scan for working DNS
-    reconnect_count=$((reconnect_count + 1))
-    echo ""
-    log Warning "Re-scanning for a working DNS..."
-
+_run_connect_flow() {
     FOUND_DNS=""
     FOUND_PORT=""
+    BEST_SCORE=999
+    STOP_AFTER_FOUND=true
 
+    echo ""
+    log Info "=== Phase 1: Scanning for a working DNS ==="
+
+    # Phase 1a: Test priority DNS first (tier 0 + tier 1)
     if [[ $PRIORITY_COUNT -gt 0 ]]; then
+        echo ""
+        log Info "Testing $PRIORITY_COUNT priority DNS entries first..."
         DNS_LIST=("${FULL_DNS_LIST[@]:0:$PRIORITY_COUNT}")
         start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
     fi
 
-    if [[ -z "$FOUND_DNS" ]]; then
-        remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
-        if [[ $remaining_count -gt 0 ]]; then
-            DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
-            start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
+    # Phase 1b: Test remaining DNS (always run to find best match)
+    remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
+    if [[ $remaining_count -gt 0 ]]; then
+        echo ""
+        if [[ -n "$FOUND_DNS" ]]; then
+            log Info "Scanning remaining $remaining_count DNS entries for a better match..."
+        else
+            log Info "Scanning remaining $remaining_count DNS entries..."
         fi
+        DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
+        start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
     fi
 
     if [[ -z "$FOUND_DNS" ]]; then
         echo ""
-        log Error "No working DNS found after re-scanning."
+        log Error "No working DNS found after testing all entries."
         log Info "Things to try:"
         log Info "  1. Update your dns-list.txt with fresh DNS entries"
         log Info "  2. Delete results/dns-failed.txt to re-test previously failed ones"
         log Info "  3. Increase Workers in config.ini for faster scanning"
-        break
+        log Info "  4. Try again later - some DNS resolvers are intermittent"
+        exit 1
     fi
-done
 
-echo ""
-log Warning "SlipStream Connector has stopped."
+    echo ""
+    log Success "Best DNS: $FOUND_DNS (score: ${BEST_SCORE}s)"
+
+    # ── Phase 2: Connect and maintain ──
+
+    echo ""
+    log Info "=== Phase 2: Establishing persistent connection ==="
+
+    reconnect_count=0
+
+    while true; do
+        if [[ ${CONFIG[MaxReconnectAttempts]} -gt 0 && $reconnect_count -ge ${CONFIG[MaxReconnectAttempts]} ]]; then
+            log Error "Max reconnect attempts (${CONFIG[MaxReconnectAttempts]}) reached. Stopping."
+            break
+        fi
+
+        port=$(get_random_port)
+
+        if [[ $reconnect_count -eq 0 ]]; then
+            log Info "Connecting via $FOUND_DNS on port $port..."
+        else
+            echo ""
+            log Warning "Reconnecting (attempt $reconnect_count) via $FOUND_DNS on port $port..."
+        fi
+
+        if start_slipstream_connection "$FOUND_DNS" "$port" "$EXE_PATH"; then
+            sleep 0.5
+            status_code=$(curl --proxy "socks5://127.0.0.1:$port" \
+                --max-time "${CONFIG[ConnectivityTimeout]}" \
+                -s -o /dev/null -w "%{http_code}" \
+                "${CONFIG[ConnectivityUrl]}" 2>/dev/null) || true
+
+            if [[ "$status_code" == "204" ]]; then
+                timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+                echo "$FOUND_DNS | $timestamp" >> "$RESULTS_DIR/dns-working.txt"
+
+                watch_connection "$port"
+                stop_active_connection
+            else
+                log Warning "Tunnel up via $FOUND_DNS but no internet"
+                stop_active_connection
+            fi
+        else
+            log Warning "Failed to connect via $FOUND_DNS"
+        fi
+
+        # Connection failed or dropped — re-scan for working DNS
+        reconnect_count=$((reconnect_count + 1))
+        echo ""
+        log Warning "Re-scanning for a working DNS..."
+
+        FOUND_DNS=""
+        FOUND_PORT=""
+        BEST_SCORE=999
+
+        STOP_AFTER_FOUND=true
+
+        if [[ $PRIORITY_COUNT -gt 0 ]]; then
+            DNS_LIST=("${FULL_DNS_LIST[@]:0:$PRIORITY_COUNT}")
+            start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
+        fi
+
+        if [[ -z "$FOUND_DNS" ]]; then
+            remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
+            if [[ $remaining_count -gt 0 ]]; then
+                DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
+                start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
+            fi
+        fi
+
+        if [[ -z "$FOUND_DNS" ]]; then
+            echo ""
+            log Error "No working DNS found after re-scanning."
+            log Info "Things to try:"
+            log Info "  1. Update your dns-list.txt with fresh DNS entries"
+            log Info "  2. Delete results/dns-failed.txt to re-test previously failed ones"
+            log Info "  3. Increase Workers in config.ini for faster scanning"
+            break
+        fi
+    done
+
+    echo ""
+    log Warning "SlipStream Connector has stopped."
+}
+
+# ── Decide: menu or direct connect ──
+
+if [[ "$FORCE_CONNECT" == "true" || -n "$CONFIG_PATH_ARG" || -n "$DNS_LIST_PATH_ARG" || -n "$CUSTOM_DNS_PATH_ARG" || $WORKERS_OVERRIDE -gt 0 ]]; then
+    _run_connect_flow
+else
+    run_menu_loop
+fi

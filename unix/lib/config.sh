@@ -63,7 +63,8 @@ read_dns_list() {
     local results_dir="$3"
 
     # ── Load known-bad DNS ──
-    local -A known_bad
+    local -A known_bad=()
+    SKIPPED_COUNT=0
     local failed_path="$results_dir/dns-failed.txt"
     if _is_true "${CONFIG[SkipPreviouslyFailed]}" && [[ -f "$failed_path" ]]; then
         while IFS='|' read -r dns _rest; do
@@ -71,7 +72,8 @@ read_dns_list() {
             dns="${dns%"${dns##*[![:space:]]}"}"
             [[ -n "$dns" ]] && known_bad["$dns"]=1
         done < "$failed_path"
-        log Info "Loaded ${#known_bad[@]} previously failed DNS entries to skip"
+        SKIPPED_COUNT=${#known_bad[@]}
+        log Debug "Loaded $SKIPPED_COUNT previously failed DNS entries to skip"
     fi
 
     # Track seen DNS to avoid duplicates across tiers
@@ -90,7 +92,7 @@ read_dns_list() {
                 seen["$line"]=1
             fi
         done < "$custom_path"
-        log Info "Tier 0 (dns-custom.txt): ${#tier0[@]} entries"
+        log Debug "Tier 0 (dns-custom.txt): ${#tier0[@]} entries"
     fi
 
     # ── Tier 1: Previously working DNS ──
@@ -106,7 +108,7 @@ read_dns_list() {
             fi
         done < "$working_path"
     fi
-    log Info "Tier 1 (previously working): ${#tier1[@]} entries"
+    log Debug "Tier 1 (previously working): ${#tier1[@]} entries"
 
     # ── Tier 2: DNS list ──
     local -a tier2=()
@@ -124,7 +126,7 @@ read_dns_list() {
     else
         log Warning "DNS list not found at $dns_path"
     fi
-    log Info "Tier 2 (dns-list.txt): ${#tier2[@]} entries"
+    log Debug "Tier 2 (dns-list.txt): ${#tier2[@]} entries"
 
     # ── Combine: tier0 → tier1 → tier2 ──
     DNS_LIST=()
@@ -132,5 +134,8 @@ read_dns_list() {
     [[ ${#tier1[@]} -gt 0 ]] && DNS_LIST+=("${tier1[@]}")
     [[ ${#tier2[@]} -gt 0 ]] && DNS_LIST+=("${tier2[@]}")
     PRIORITY_COUNT=$(( ${#tier0[@]} + ${#tier1[@]} ))
-    log Info "DNS queue: ${#DNS_LIST[@]} total (custom: ${#tier0[@]}, working: ${#tier1[@]}, list: ${#tier2[@]})"
+    TIER0_COUNT=${#tier0[@]}
+    TIER1_COUNT=${#tier1[@]}
+    TIER2_COUNT=${#tier2[@]}
+    log Debug "DNS queue: ${#DNS_LIST[@]} total (custom: ${#tier0[@]}, working: ${#tier1[@]}, list: ${#tier2[@]})"
 }

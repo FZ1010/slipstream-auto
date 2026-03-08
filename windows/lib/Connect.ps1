@@ -94,6 +94,9 @@ function Watch-Connection {
     while (-not $process.HasExited) {
         Start-Sleep -Seconds $Config.HealthCheckInterval
 
+        # Check if interrupted from menu
+        if ($global:MenuInterrupted) { return $false }
+
         # Check output for "became unavailable"
         $output = Read-ProcessOutput -OutFile $Connection.OutFile -ErrFile $Connection.ErrFile
         if ($output -match "became unavailable") {
