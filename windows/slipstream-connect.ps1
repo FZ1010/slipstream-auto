@@ -159,15 +159,84 @@ try {
     Write-Host ""
     Write-Log -Message "=== Phase 2: Establishing persistent connection ===" -Level Info
 
-    $startIndex = 0
-    for ($j = 0; $j -lt $dnsList.Count; $j++) {
-        if ($dnsList[$j] -eq $result.Dns) {
-            $startIndex = $j
+    $reconnectCount = 0
+    $workingDns = $result.Dns
+    $workingPath = Join-Path $resultsDir "dns-working.txt"
+
+    while ($true) {
+        if ($config.MaxReconnectAttempts -gt 0 -and $reconnectCount -ge $config.MaxReconnectAttempts) {
+            Write-Log -Message "Max reconnect attempts ($($config.MaxReconnectAttempts)) reached. Stopping." -Level Error
             break
         }
-    }
 
-    Start-ConnectionLoop -DnsList $dnsList -StartIndex $startIndex -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+        $port = Get-RandomPort
+
+        if ($reconnectCount -eq 0) {
+            Write-Log -Message "Connecting via $workingDns on port $port..." -Level Info
+        } else {
+            Write-Host ""
+            Write-Log -Message "Reconnecting (attempt $reconnectCount) via $workingDns on port $port..." -Level Warning
+        }
+
+        $connection = Start-SlipstreamConnection -Dns $workingDns -Port $port -Config $config -ExePath $exePath
+
+        if ($null -ne $connection) {
+            Start-Sleep -Milliseconds 500
+            $internetWorks = $false
+            try {
+                $statusCode = & curl.exe --proxy "socks5://127.0.0.1:$port" `
+                    --max-time $config.ConnectivityTimeout `
+                    -s -o NUL -w "%{http_code}" `
+                    $config.ConnectivityUrl 2>$null
+                if ($statusCode -eq "204") { $internetWorks = $true }
+            } catch {}
+
+            if ($internetWorks) {
+                $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                Add-Content -Path $workingPath -Value "$workingDns | $timestamp" -Encoding UTF8
+
+                $stillAlive = Watch-Connection -Connection $connection -Port $port -Config $config
+                Stop-Connection -Connection $connection
+            } else {
+                Write-Log -Message "Tunnel up via $workingDns but no internet" -Level Warning
+                Stop-Connection -Connection $connection
+            }
+        } else {
+            Write-Log -Message "Failed to connect via $workingDns" -Level Warning
+        }
+
+        # Connection failed or dropped — re-scan for working DNS
+        $reconnectCount++
+        Write-Host ""
+        Write-Log -Message "Re-scanning for a working DNS..." -Level Warning
+
+        $result = $null
+
+        if ($priorityCount -gt 0) {
+            $priorityList = @($dnsList[0..($priorityCount - 1)])
+            $result = Start-DnsTesting -DnsList $priorityList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+        }
+
+        if (-not $result) {
+            $remainingCount = $dnsList.Count - $priorityCount
+            if ($remainingCount -gt 0) {
+                $remainingList = @($dnsList[$priorityCount..($dnsList.Count - 1)])
+                $result = Start-DnsTesting -DnsList $remainingList -Config $config -ExePath $exePath -ResultsDirectory $resultsDir
+            }
+        }
+
+        if (-not $result) {
+            Write-Host ""
+            Write-Log -Message "No working DNS found after re-scanning." -Level Error
+            Write-Log -Message "Things to try:" -Level Info
+            Write-Log -Message "  1. Update your dns-list.txt with fresh DNS entries" -Level Info
+            Write-Log -Message "  2. Delete results\dns-failed.txt to re-test previously failed ones" -Level Info
+            Write-Log -Message "  3. Increase Workers in config.ini for faster scanning" -Level Info
+            break
+        }
+
+        $workingDns = $result.Dns
+    }
 }
 finally {
     # Always clean up on exit

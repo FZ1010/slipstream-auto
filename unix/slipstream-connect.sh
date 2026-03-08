@@ -184,19 +184,75 @@ fi
 echo ""
 log Info "=== Phase 2: Establishing persistent connection ==="
 
-# Restore full list for reconnection loop
-DNS_LIST=("${FULL_DNS_LIST[@]}")
+reconnect_count=0
 
-# Find start index
-start_index=0
-for i in "${!DNS_LIST[@]}"; do
-    if [[ "${DNS_LIST[$i]}" == "$FOUND_DNS" ]]; then
-        start_index=$i
+while true; do
+    if [[ ${CONFIG[MaxReconnectAttempts]} -gt 0 && $reconnect_count -ge ${CONFIG[MaxReconnectAttempts]} ]]; then
+        log Error "Max reconnect attempts (${CONFIG[MaxReconnectAttempts]}) reached. Stopping."
+        break
+    fi
+
+    port=$(get_random_port)
+
+    if [[ $reconnect_count -eq 0 ]]; then
+        log Info "Connecting via $FOUND_DNS on port $port..."
+    else
+        echo ""
+        log Warning "Reconnecting (attempt $reconnect_count) via $FOUND_DNS on port $port..."
+    fi
+
+    if start_slipstream_connection "$FOUND_DNS" "$port" "$EXE_PATH"; then
+        sleep 0.5
+        status_code=$(curl --proxy "socks5://127.0.0.1:$port" \
+            --max-time "${CONFIG[ConnectivityTimeout]}" \
+            -s -o /dev/null -w "%{http_code}" \
+            "${CONFIG[ConnectivityUrl]}" 2>/dev/null) || true
+
+        if [[ "$status_code" == "204" ]]; then
+            timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+            echo "$FOUND_DNS | $timestamp" >> "$RESULTS_DIR/dns-working.txt"
+
+            watch_connection "$port"
+            stop_active_connection
+        else
+            log Warning "Tunnel up via $FOUND_DNS but no internet"
+            stop_active_connection
+        fi
+    else
+        log Warning "Failed to connect via $FOUND_DNS"
+    fi
+
+    # Connection failed or dropped — re-scan for working DNS
+    reconnect_count=$((reconnect_count + 1))
+    echo ""
+    log Warning "Re-scanning for a working DNS..."
+
+    FOUND_DNS=""
+    FOUND_PORT=""
+
+    if [[ $PRIORITY_COUNT -gt 0 ]]; then
+        DNS_LIST=("${FULL_DNS_LIST[@]:0:$PRIORITY_COUNT}")
+        start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
+    fi
+
+    if [[ -z "$FOUND_DNS" ]]; then
+        remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
+        if [[ $remaining_count -gt 0 ]]; then
+            DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
+            start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
+        fi
+    fi
+
+    if [[ -z "$FOUND_DNS" ]]; then
+        echo ""
+        log Error "No working DNS found after re-scanning."
+        log Info "Things to try:"
+        log Info "  1. Update your dns-list.txt with fresh DNS entries"
+        log Info "  2. Delete results/dns-failed.txt to re-test previously failed ones"
+        log Info "  3. Increase Workers in config.ini for faster scanning"
         break
     fi
 done
-
-start_connection_loop "$start_index" "$EXE_PATH" "$RESULTS_DIR"
 
 echo ""
 log Warning "SlipStream Connector has stopped."
