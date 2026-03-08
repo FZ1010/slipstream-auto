@@ -26,8 +26,7 @@ slipstream-auto/
 │       └── test-dns.sh
 ├── config.ini              # Shared config (both platforms)
 ├── dns-custom.txt          # Your own DNS list (optional, highest priority)
-├── dns-resolvers.txt       # Curated resolvers (~9k entries)
-├── dns-list.txt            # Large DNS list (~25k entries)
+├── dns-list.txt            # DNS list (~35k entries)
 ├── results/                # Generated at runtime
 └── README.md
 ```
@@ -51,8 +50,7 @@ DNS entries are tested in this order. The search stops as soon as a working DNS 
 |------|------|-------------|
 | 0 | `dns-custom.txt` | Your own DNS entries (optional, highest priority) |
 | 1 | `results/dns-working.txt` | DNS that worked in previous runs (auto-generated) |
-| 2 | `dns-resolvers.txt` | Curated list of ~9,000 resolvers |
-| 3 | `dns-list.txt` | Large list of ~25,000 resolvers |
+| 2 | `dns-list.txt` | Combined list of ~35,000 resolvers |
 
 Duplicates are removed across tiers, and previously failed DNS are skipped.
 
@@ -108,7 +106,6 @@ Edit `config.ini` in the root folder (shared by both platforms):
 | `ConnectivityUrl` | Google 204 check | URL for internet verification |
 | `HealthCheckInterval` | `30` | Seconds between health checks |
 | `MaxReconnectAttempts` | `0` | Max reconnects (0 = unlimited) |
-| `ShuffleDns` | `true` | Randomize DNS order each run |
 | `PrioritizeKnownGood` | `true` | Try previously working DNS first |
 | `SkipPreviouslyFailed` | `true` | Skip previously failed DNS |
 

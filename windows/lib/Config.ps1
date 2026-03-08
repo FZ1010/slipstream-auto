@@ -19,7 +19,6 @@ function Read-Config {
         ConnectivityTimeout = 5
         HealthCheckInterval = 30
         MaxReconnectAttempts = 0
-        ShuffleDns          = $true
         PrioritizeKnownGood = $true
         SkipPreviouslyFailed = $true
     }
@@ -62,7 +61,6 @@ function Read-DnsList {
     param(
         [Parameter(Mandatory)]
         [string]$Path,
-        [string]$ResolversPath,
         [string]$CustomPath,
         [hashtable]$Config,
         [string]$ResultsDirectory
@@ -103,40 +101,22 @@ function Read-DnsList {
     }
     Write-Log -Message "Tier 1 (previously working): $($tier1.Count) entries" -Level Info
 
-    # ── Tier 2: Curated resolvers list ──
+    # ── Tier 2: DNS list ──
     $tier2 = @()
-    if ($ResolversPath -and (Test-Path $ResolversPath)) {
-        $tier2 = @(Get-Content -Path $ResolversPath -Encoding UTF8 |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { $_ -ne '' -and $_ -match '^\d' -and -not $knownBad.ContainsKey($_) -and -not $seen.ContainsKey($_) } |
-            ForEach-Object { $seen[$_] = $true; $_ })
-
-        if ($Config.ShuffleDns -and $tier2.Count -gt 0) {
-            $tier2 = $tier2 | Get-Random -Count $tier2.Count
-        }
-    }
-    Write-Log -Message "Tier 2 (dns-resolvers.txt): $($tier2.Count) entries" -Level Info
-
-    # ── Tier 3: Large DNS list ──
-    $tier3 = @()
     if (Test-Path $Path) {
-        $tier3 = @(Get-Content -Path $Path -Encoding UTF8 |
+        $tier2 = @(Get-Content -Path $Path -Encoding UTF8 |
             ForEach-Object { $_.Trim() } |
             Where-Object { $_ -ne '' -and $_ -match '^\d' -and -not $knownBad.ContainsKey($_) -and -not $seen.ContainsKey($_) } |
             ForEach-Object { $seen[$_] = $true; $_ })
-
-        if ($Config.ShuffleDns -and $tier3.Count -gt 0) {
-            $tier3 = $tier3 | Get-Random -Count $tier3.Count
-        }
     } else {
         Write-Log -Message "DNS list not found at $Path" -Level Warning
     }
-    Write-Log -Message "Tier 3 (dns-list.txt): $($tier3.Count) entries" -Level Info
+    Write-Log -Message "Tier 2 (dns-list.txt): $($tier2.Count) entries" -Level Info
 
-    # ── Combine: tier0 -> tier1 -> tier2 -> tier3 ──
-    $final = @($tier0) + @($tier1) + @($tier2) + @($tier3)
+    # ── Combine: tier0 -> tier1 -> tier2 ──
+    $final = @($tier0) + @($tier1) + @($tier2)
     $priorityCount = $tier0.Count + $tier1.Count
-    Write-Log -Message "DNS queue: $($tier0.Count) + $($tier1.Count) + $($tier2.Count) + $($tier3.Count) = $($final.Count) total" -Level Info
+    Write-Log -Message "DNS queue: $($tier0.Count) + $($tier1.Count) + $($tier2.Count) = $($final.Count) total" -Level Info
 
     return @{ DnsList = $final; PriorityCount = $priorityCount }
 }

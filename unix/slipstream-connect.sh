@@ -66,7 +66,6 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 [[ -z "$CONFIG_PATH" ]] && CONFIG_PATH="$PROJECT_ROOT/config.ini"
 [[ -z "$DNS_LIST_PATH" ]] && DNS_LIST_PATH="$PROJECT_ROOT/dns-list.txt"
 [[ -z "$CUSTOM_DNS_PATH" ]] && CUSTOM_DNS_PATH="$PROJECT_ROOT/dns-custom.txt"
-RESOLVERS_PATH="$PROJECT_ROOT/dns-resolvers.txt"
 RESULTS_DIR="$PROJECT_ROOT/results"
 EXE_PATH="$PROJECT_ROOT/slipstream-client"
 
@@ -107,7 +106,7 @@ echo ""
 
 DNS_LIST=()
 PRIORITY_COUNT=0
-read_dns_list "$CUSTOM_DNS_PATH" "$DNS_LIST_PATH" "$RESOLVERS_PATH" "$RESULTS_DIR"
+read_dns_list "$CUSTOM_DNS_PATH" "$DNS_LIST_PATH" "$RESULTS_DIR"
 
 if [[ ${#DNS_LIST[@]} -eq 0 ]]; then
     log Error "No DNS entries to test! Check your dns-list.txt file."

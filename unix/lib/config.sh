@@ -14,7 +14,6 @@ CONFIG[FallbackUrl]="http://www.msftconnecttest.com/connecttest.txt"
 CONFIG[ConnectivityTimeout]="5"
 CONFIG[HealthCheckInterval]="30"
 CONFIG[MaxReconnectAttempts]="0"
-CONFIG[ShuffleDns]="true"
 CONFIG[PrioritizeKnownGood]="true"
 CONFIG[SkipPreviouslyFailed]="true"
 
@@ -61,8 +60,7 @@ read_config() {
 read_dns_list() {
     local custom_path="$1"
     local dns_path="$2"
-    local resolvers_path="$3"
-    local results_dir="$4"
+    local results_dir="$3"
 
     # ── Load known-bad DNS ──
     local -A known_bad
@@ -110,9 +108,9 @@ read_dns_list() {
     fi
     log Info "Tier 1 (previously working): ${#tier1[@]} entries"
 
-    # ── Tier 2: Curated resolvers list ──
+    # ── Tier 2: DNS list ──
     local -a tier2=()
-    if [[ -f "$resolvers_path" ]]; then
+    if [[ -f "$dns_path" ]]; then
         while IFS= read -r line; do
             line="${line#"${line%%[![:space:]]*}"}"
             line="${line%"${line##*[![:space:]]}"}"
@@ -122,50 +120,17 @@ read_dns_list() {
                 tier2+=("$line")
                 seen["$line"]=1
             fi
-        done < "$resolvers_path"
-
-        if _is_true "${CONFIG[ShuffleDns]}" && [[ ${#tier2[@]} -gt 0 ]]; then
-            if command -v shuf &>/dev/null; then
-                mapfile -t tier2 < <(printf '%s\n' "${tier2[@]}" | shuf)
-            else
-                mapfile -t tier2 < <(printf '%s\n' "${tier2[@]}" | awk 'BEGIN{srand()}{print rand()"\t"$0}' | sort -n | cut -f2-)
-            fi
-        fi
-    fi
-    log Info "Tier 2 (dns-resolvers.txt): ${#tier2[@]} entries"
-
-    # ── Tier 3: Large DNS list ──
-    local -a tier3=()
-    if [[ -f "$dns_path" ]]; then
-        while IFS= read -r line; do
-            line="${line#"${line%%[![:space:]]*}"}"
-            line="${line%"${line##*[![:space:]]}"}"
-            [[ -z "$line" || "$line" == \#* ]] && continue
-            [[ "$line" =~ ^[0-9] ]] || continue
-            if [[ -z "${known_bad[$line]+x}" && -z "${seen[$line]+x}" ]]; then
-                tier3+=("$line")
-                seen["$line"]=1
-            fi
         done < "$dns_path"
-
-        if _is_true "${CONFIG[ShuffleDns]}" && [[ ${#tier3[@]} -gt 0 ]]; then
-            if command -v shuf &>/dev/null; then
-                mapfile -t tier3 < <(printf '%s\n' "${tier3[@]}" | shuf)
-            else
-                mapfile -t tier3 < <(printf '%s\n' "${tier3[@]}" | awk 'BEGIN{srand()}{print rand()"\t"$0}' | sort -n | cut -f2-)
-            fi
-        fi
     else
         log Warning "DNS list not found at $dns_path"
     fi
-    log Info "Tier 3 (dns-list.txt): ${#tier3[@]} entries"
+    log Info "Tier 2 (dns-list.txt): ${#tier2[@]} entries"
 
-    # ── Combine: tier0 → tier1 → tier2 → tier3 ──
+    # ── Combine: tier0 → tier1 → tier2 ──
     DNS_LIST=()
     [[ ${#tier0[@]} -gt 0 ]] && DNS_LIST+=("${tier0[@]}")
     [[ ${#tier1[@]} -gt 0 ]] && DNS_LIST+=("${tier1[@]}")
     [[ ${#tier2[@]} -gt 0 ]] && DNS_LIST+=("${tier2[@]}")
-    [[ ${#tier3[@]} -gt 0 ]] && DNS_LIST+=("${tier3[@]}")
     PRIORITY_COUNT=$(( ${#tier0[@]} + ${#tier1[@]} ))
-    log Info "DNS queue: ${#tier0[@]} + ${#tier1[@]} + ${#tier2[@]} + ${#tier3[@]} = ${#DNS_LIST[@]} total"
+    log Info "DNS queue: ${#tier0[@]} + ${#tier1[@]} + ${#tier2[@]} = ${#DNS_LIST[@]} total"
 }
