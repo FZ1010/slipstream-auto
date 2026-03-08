@@ -15,6 +15,7 @@ slipstream-auto/
 │       ├── Config.ps1
 │       ├── Connect.ps1
 │       ├── Logger.ps1
+│       ├── Menu.ps1
 │       └── Test-Dns.ps1
 ├── unix/                   # Linux / macOS scripts
 │   ├── start.sh            # Run this
@@ -23,6 +24,7 @@ slipstream-auto/
 │       ├── config.sh
 │       ├── connect.sh
 │       ├── logger.sh
+│       ├── menu.sh
 │       └── test-dns.sh
 ├── config.ini              # Shared config (both platforms)
 ├── dns-custom.txt          # Your own DNS list (optional, highest priority)
@@ -35,12 +37,27 @@ Place `slipstream-client.exe` (Windows) or `slipstream-client` (Linux) in the **
 
 ## How It Works
 
-1. Loads DNS entries using a **3-tier priority system** (see below)
-2. Tests multiple DNS entries **in parallel** — spawns `slipstream-client` for each, checks for tunnel establishment within 3 seconds
-3. Verifies **actual internet connectivity** through the SOCKS5 proxy (not just tunnel up)
-4. Connects using the first confirmed working DNS
-5. Monitors connection health and **auto-reconnects** if the connection drops
-6. Saves results so future runs are faster (working DNS prioritized, failed DNS skipped)
+1. Opens an **interactive menu** with options to connect, test DNS, configure settings, and view results
+2. Loads DNS entries using a **3-tier priority system** (see below)
+3. Tests multiple DNS entries **in parallel** — spawns `slipstream-client` for each, checks for tunnel establishment within 3 seconds
+4. **Ranks working DNS by speed** and saves sorted results for future runs
+5. Verifies **actual internet connectivity** through the SOCKS5 proxy (not just tunnel up)
+6. Connects using the best (fastest) confirmed working DNS
+7. Monitors connection health and **auto-reconnects** if the connection drops
+8. Saves results so future runs are faster (working DNS prioritized, failed DNS skipped)
+
+### Interactive Menu
+
+When launched without CLI arguments, the tool shows an interactive menu:
+
+- **Connect** — Uses the best known DNS from previous runs, or scans first if none exist
+- **Test DNS** — Scans all DNS tiers and ranks them by speed
+- **Configure** — Edit config.ini settings (domain, workers, timeout, etc.) interactively
+- **View Results** — Show top working DNS and failed counts
+- **Clear Results** — Delete saved results to start fresh
+- **Help** — Show CLI usage info
+
+Press **Ctrl+C** anytime during scanning or connecting to return to the menu.
 
 ### DNS Priority Tiers
 
@@ -78,8 +95,9 @@ Both platforms need DNS list files (included in the release).
 3. Edit `config.ini` — set your `Domain`
 4. (Optional) Add your own DNS entries to `dns-custom.txt`
 5. **Double-click `windows\start.bat`**
-6. Wait for it to find a working DNS and connect
-7. Set your browser/system proxy to **SOCKS5 `127.0.0.1:<port>`** (the port is shown in the output)
+6. Choose **Connect** from the menu (or **Test DNS** to scan everything first)
+7. Wait for it to find a working DNS and connect
+8. Set your browser/system proxy to **SOCKS5 `127.0.0.1:<port>`** (the port is shown in the output)
 
 ### Linux / macOS
 
@@ -120,13 +138,15 @@ Edit `config.ini` in the root folder (shared by both platforms):
   -DnsListPath <path>   Path to dns-list.txt
   -UserDnsPath <path>   Path to your own DNS file (highest priority)
   -Workers <number>     Override parallel worker count
+  -Connect              Skip menu, connect directly
   -Help                 Show help
 ```
 
 Or just double-click `windows\start.bat` (passes arguments through):
 
 ```
-windows\start.bat -Workers 10
+windows\start.bat                  # Opens interactive menu
+windows\start.bat -Workers 10      # Bypasses menu, connects with 10 workers
 ```
 
 ### Linux / macOS (Bash)
@@ -138,20 +158,22 @@ windows\start.bat -Workers 10
   -d, --dns-list <path>   Path to dns-list.txt
   -u, --user-dns <path>   Path to your own DNS file (highest priority)
   -w, --workers <number>  Override parallel worker count
+  --connect               Skip menu, connect directly
   -h, --help              Show help
 ```
 
 Or just use `unix/start.sh`:
 
 ```bash
-./unix/start.sh -w 10
+./unix/start.sh                # Opens interactive menu
+./unix/start.sh -w 10          # Bypasses menu, connects with 10 workers
 ```
 
 ## Output Files
 
 After running, check the `results/` folder in the project root:
 
-- **`dns-working.txt`** — DNS entries that were confirmed working (with timestamps)
+- **`dns-working.txt`** — DNS entries that were confirmed working, ranked by speed (fastest first)
 - **`dns-failed.txt`** — DNS entries that failed (skipped on future runs)
 - **`session.log`** — Full log of the session
 
@@ -164,7 +186,7 @@ To re-test previously failed DNS entries, delete `results/dns-failed.txt`.
 - **"curl not found"** — Windows: need Windows 10+. Linux: `sudo apt install curl` (or equivalent).
 - **Connection drops frequently** — Increase `HealthCheckInterval` in config.ini or try more workers to find better DNS entries.
 - **Too slow** — Increase `Workers` in config.ini (e.g., 10 or 20). More workers = more parallel tests.
-- **Script stuck / can't Ctrl+C** — The script registers cleanup handlers. If it's truly stuck, close the terminal window. Kill orphaned processes: `taskkill /F /IM slipstream-client.exe` (Windows) or `pkill slipstream-client` (Linux).
+- **Script stuck / can't Ctrl+C** — Ctrl+C returns to the menu during scanning or connecting. If the script is truly stuck, close the terminal window. Kill orphaned processes: `taskkill /F /IM slipstream-client.exe` (Windows) or `pkill slipstream-client` (Linux).
 
 ## Contributing
 
