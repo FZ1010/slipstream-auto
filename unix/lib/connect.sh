@@ -14,7 +14,7 @@ start_slipstream_connection() {
     local port="$2"
     local exe_path="$3"
 
-    ACTIVE_OUT_FILE=$(mktemp)
+    ACTIVE_OUT_FILE=$(mktemp "$SLIPSTREAM_TEMP_DIR/conn.XXXXXX")
 
     "$exe_path" \
         --domain "${CONFIG[Domain]}" \

@@ -116,6 +116,10 @@ fi
 # Save full list for reconnection loop
 FULL_DNS_LIST=("${DNS_LIST[@]}")
 
+# ── Initialize temp directory (clean on startup for crash leftovers) ──
+
+init_slipstream_temp_dir
+
 # ── Cleanup on exit (Ctrl+C, kill, etc.) ──
 
 cleanup() {
@@ -135,6 +139,9 @@ cleanup() {
     # Kill any remaining slipstream-client processes we spawned
     pkill -P $$ slipstream-client 2>/dev/null || true
 
+    # Clean up temp directory
+    cleanup_slipstream_temp_dir
+
     log Info "Goodbye."
     exit 0
 }
@@ -145,6 +152,7 @@ trap cleanup INT TERM EXIT
 
 FOUND_DNS=""
 FOUND_PORT=""
+BEST_SCORE=999
 
 echo ""
 log Info "=== Phase 1: Scanning for a working DNS ==="
@@ -157,15 +165,17 @@ if [[ $PRIORITY_COUNT -gt 0 ]]; then
     start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
 fi
 
-# Phase 1b: If no priority DNS worked, test the rest
-if [[ -z "$FOUND_DNS" ]]; then
-    remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
-    if [[ $remaining_count -gt 0 ]]; then
-        echo ""
+# Phase 1b: Test remaining DNS (always run to find best match)
+remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
+if [[ $remaining_count -gt 0 ]]; then
+    echo ""
+    if [[ -n "$FOUND_DNS" ]]; then
+        log Info "Scanning remaining $remaining_count DNS entries for a better match..."
+    else
         log Info "Scanning remaining $remaining_count DNS entries..."
-        DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
-        start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
     fi
+    DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
+    start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
 fi
 
 if [[ -z "$FOUND_DNS" ]]; then
@@ -178,6 +188,9 @@ if [[ -z "$FOUND_DNS" ]]; then
     log Info "  4. Try again later - some DNS resolvers are intermittent"
     exit 1
 fi
+
+echo ""
+log Success "Best DNS: $FOUND_DNS (score: ${BEST_SCORE}s)"
 
 # ── Phase 2: Connect and maintain ──
 
@@ -229,18 +242,17 @@ while true; do
 
     FOUND_DNS=""
     FOUND_PORT=""
+    BEST_SCORE=999
 
     if [[ $PRIORITY_COUNT -gt 0 ]]; then
         DNS_LIST=("${FULL_DNS_LIST[@]:0:$PRIORITY_COUNT}")
         start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
     fi
 
-    if [[ -z "$FOUND_DNS" ]]; then
-        remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
-        if [[ $remaining_count -gt 0 ]]; then
-            DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
-            start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
-        fi
+    remaining_count=$(( ${#FULL_DNS_LIST[@]} - PRIORITY_COUNT ))
+    if [[ $remaining_count -gt 0 ]]; then
+        DNS_LIST=("${FULL_DNS_LIST[@]:$PRIORITY_COUNT}")
+        start_dns_testing "$EXE_PATH" "$RESULTS_DIR"
     fi
 
     if [[ -z "$FOUND_DNS" ]]; then
