@@ -35,7 +35,7 @@ Place `slipstream-client.exe` (Windows) or `slipstream-client` (Linux) in the **
 
 ## How It Works
 
-1. Loads DNS entries using a **4-tier priority system** (see below)
+1. Loads DNS entries using a **3-tier priority system** (see below)
 2. Tests multiple DNS entries **in parallel** — spawns `slipstream-client` for each, checks for tunnel establishment within 3 seconds
 3. Verifies **actual internet connectivity** through the SOCKS5 proxy (not just tunnel up)
 4. Connects using the first confirmed working DNS

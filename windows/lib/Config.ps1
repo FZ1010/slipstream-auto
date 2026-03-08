@@ -116,7 +116,7 @@ function Read-DnsList {
     # ── Combine: tier0 -> tier1 -> tier2 ──
     $final = @($tier0) + @($tier1) + @($tier2)
     $priorityCount = $tier0.Count + $tier1.Count
-    Write-Log -Message "DNS queue: $($tier0.Count) + $($tier1.Count) + $($tier2.Count) = $($final.Count) total" -Level Info
+    Write-Log -Message "DNS queue: $($final.Count) total (custom: $($tier0.Count), working: $($tier1.Count), list: $($tier2.Count))" -Level Info
 
     return @{ DnsList = $final; PriorityCount = $priorityCount }
 }

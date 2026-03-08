@@ -132,5 +132,5 @@ read_dns_list() {
     [[ ${#tier1[@]} -gt 0 ]] && DNS_LIST+=("${tier1[@]}")
     [[ ${#tier2[@]} -gt 0 ]] && DNS_LIST+=("${tier2[@]}")
     PRIORITY_COUNT=$(( ${#tier0[@]} + ${#tier1[@]} ))
-    log Info "DNS queue: ${#tier0[@]} + ${#tier1[@]} + ${#tier2[@]} = ${#DNS_LIST[@]} total"
+    log Info "DNS queue: ${#DNS_LIST[@]} total (custom: ${#tier0[@]}, working: ${#tier1[@]}, list: ${#tier2[@]})"
 }
