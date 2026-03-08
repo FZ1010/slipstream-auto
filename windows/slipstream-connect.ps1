@@ -97,6 +97,10 @@ if ($dnsList.Count -eq 0) {
     exit 1
 }
 
+# ── Initialize temp directory (clean stale files from previous runs) ──
+
+Initialize-SlipstreamTempDir
+
 # ── Ctrl+C cleanup handler ──
 # Ensure all slipstream-client processes we spawned get killed on exit
 
@@ -104,6 +108,7 @@ $cleanupBlock = {
     Write-Host ""
     Write-Host "Shutting down... killing slipstream-client processes..." -ForegroundColor Yellow
     Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Remove-SlipstreamTempDir
     Write-Host "Goodbye." -ForegroundColor Cyan
 }
 
@@ -241,6 +246,7 @@ try {
 finally {
     # Always clean up on exit
     Get-Process -Name "slipstream-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Remove-SlipstreamTempDir
 }
 
 Write-Host ""

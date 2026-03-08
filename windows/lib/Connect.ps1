@@ -19,7 +19,7 @@ function Start-SlipstreamConnection {
         [string]$ExePath
     )
 
-    $outFile = [System.IO.Path]::GetTempFileName()
+    $outFile = New-SlipstreamTempFile
     $errFile = "$outFile.err"
 
     $arguments = "--domain $($Config.Domain) --congestion-control $($Config.CongestionControl) --keep-alive-interval $($Config.KeepAliveInterval) --tcp-listen-port $Port --resolver $Dns"
